@@ -1,0 +1,16 @@
+[Unit]
+Description=Booster Native SDK Lab Web Wrapper
+After=network.target
+
+[Service]
+Type=simple
+User=booster
+Environment=XDG_RUNTIME_DIR=/run/user/1007
+Environment=PULSE_SERVER=unix:/run/user/1007/pulse/native
+WorkingDirectory=/home/booster/Workspace/booster_native_sdk_lab
+ExecStart=/home/booster/Workspace/booster_native_sdk_lab/build/booster_sdk_http_wrapper
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,236 @@
+:root {
+  --bg: #f4efe7;
+  --panel: rgba(255, 255, 255, 0.9);
+  --line: rgba(47, 40, 28, 0.12);
+  --ink: #1f1a14;
+  --muted: #6d6357;
+  --accent: #c95c2b;
+  --warn: #b17b18;
+  --danger: #8e2d2d;
+  --shadow: 0 18px 50px rgba(71, 48, 23, 0.12);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "IBM Plex Sans", "Noto Sans", sans-serif;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at top left, rgba(201, 92, 43, 0.15), transparent 30%),
+    linear-gradient(180deg, #f8f4ec 0%, var(--bg) 100%);
+}
+
+.page {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 32px 20px 48px;
+}
+
+.hero {
+  margin-bottom: 24px;
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+h1, h2 {
+  margin: 0;
+  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+}
+
+h1 {
+  font-size: clamp(32px, 4vw, 52px);
+  line-height: 0.98;
+  margin-bottom: 12px;
+}
+
+.lede,
+.summary {
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.panel {
+  background: var(--panel);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 18px;
+  box-shadow: var(--shadow);
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.battery-card {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 18px;
+}
+
+.tts-panel {
+  margin-bottom: 18px;
+}
+
+.volume-panel {
+  margin-bottom: 18px;
+}
+
+.volume-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.volume-value {
+  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+  font-size: 18px;
+  color: var(--accent);
+}
+
+.volume-slider {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.tts-label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.tts-input {
+  width: 100%;
+  resize: vertical;
+  min-height: 108px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--ink);
+  font: inherit;
+  line-height: 1.5;
+}
+
+.tts-input:focus {
+  outline: 2px solid rgba(201, 92, 43, 0.28);
+  outline-offset: 2px;
+}
+
+.battery-shell {
+  position: relative;
+  width: 92px;
+  height: 48px;
+  border: 3px solid var(--ink);
+  border-radius: 10px;
+  padding: 4px;
+}
+
+.battery-shell::after {
+  content: "";
+  position: absolute;
+  right: -8px;
+  top: 14px;
+  width: 6px;
+  height: 16px;
+  border-radius: 0 4px 4px 0;
+  background: var(--ink);
+}
+
+.battery-level {
+  height: 100%;
+  width: 0%;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #cf4f2e 0%, #d89d2d 55%, #69a44d 100%);
+  transition: width 180ms ease;
+}
+
+.battery-main {
+  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+  font-size: 32px;
+  line-height: 1;
+  margin: 10px 0 8px;
+}
+
+.pill {
+  display: inline-block;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #ece4d8;
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.pill-good {
+  background: #d9ecd4;
+  color: #214b20;
+}
+
+.pill-warn {
+  background: #f4e3bd;
+  color: #6e4b03;
+}
+
+.pill-bad {
+  background: #f3d7d7;
+  color: #6f1f1f;
+}
+
+button {
+  font: inherit;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 11px 16px;
+  cursor: pointer;
+  background: transparent;
+  color: var(--ink);
+}
+
+.debug-window {
+  margin: 0;
+  min-height: 220px;
+  overflow: auto;
+  padding: 16px;
+  border-radius: 16px;
+  background: #181512;
+  color: #f3ede3;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+@media (max-width: 700px) {
+  .panel-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .battery-card {
+    grid-template-columns: 1fr;
+  }
+}

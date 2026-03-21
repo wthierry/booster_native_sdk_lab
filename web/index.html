@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Booster Battery Console</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="page">
+      <section class="hero">
+        <p class="eyebrow">Booster Robot</p>
+        <h1>Battery Console</h1>
+        <p class="lede">Minimal battery-only view running directly on the robot.</p>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Battery Status</h2>
+          <div class="button-row">
+            <button id="refresh-battery" class="ghost">Refresh</button>
+            <button id="start-tts" class="ghost">Start Listening</button>
+            <button id="speak-tts" class="ghost">Speak</button>
+            <button id="stop-tts" class="ghost">Stop TTS</button>
+          </div>
+        </div>
+
+        <div class="battery-card">
+          <div class="battery-shell">
+            <div id="battery-level" class="battery-level"></div>
+          </div>
+          <div class="battery-stats">
+            <div id="battery-pill" class="pill">Waiting</div>
+            <div id="battery-percent" class="battery-main">--%</div>
+            <div id="battery-details" class="summary">Waiting for battery data...</div>
+          </div>
+        </div>
+
+        <div class="tts-panel">
+          <label class="tts-label" for="tts-text">Speak Text</label>
+          <textarea id="tts-text" class="tts-input" rows="4">hello from the ROS RTC TTS wrapper</textarea>
+        </div>
+
+        <div class="volume-panel">
+          <div class="volume-head">
+            <label class="tts-label" for="volume-slider">Speaker Volume</label>
+            <span id="volume-value" class="volume-value">--%</span>
+          </div>
+          <input id="volume-slider" class="volume-slider" type="range" min="0" max="150" step="1" value="100">
+        </div>
+
+        <pre id="debug-window" class="debug-window"></pre>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
