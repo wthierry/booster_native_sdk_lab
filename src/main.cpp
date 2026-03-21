@@ -10,6 +10,7 @@
 #include <array>
 #include <cstdlib>
 #include <cctype>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <mutex>
@@ -130,6 +131,23 @@ std::string RunCommand(const std::string &command, int *exit_status = nullptr) {
         *exit_status = status;
     }
     return output;
+}
+
+std::string ResolveRosTtsHelperPath() {
+    if (const char *override_path = std::getenv("BOOSTER_ROS_TTS_HELPER")) {
+        const std::string configured = Trim(override_path);
+        if (!configured.empty()) {
+            return configured;
+        }
+    }
+
+    const std::filesystem::path repo_helper =
+        std::filesystem::path(BOOSTER_NATIVE_SDK_LAB_SOURCE_DIR) / kRosTtsHelper;
+    if (std::filesystem::exists(repo_helper)) {
+        return repo_helper.string();
+    }
+
+    return kRosTtsHelper;
 }
 
 int ParsePercentValue(const std::string &text) {
@@ -269,7 +287,7 @@ private:
             ShellEscape(kRosSetupScript) +
             " >/dev/null 2>&1 && "
             "python3 " +
-            ShellEscape(kRosTtsHelper) + " " + ShellEscape(action) + " " + ShellEscape(payload.dump());
+            ShellEscape(ResolveRosTtsHelperPath()) + " " + ShellEscape(action) + " " + ShellEscape(payload.dump());
 
         std::array<char, 512> buffer{};
         std::string output;

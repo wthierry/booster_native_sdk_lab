@@ -40,6 +40,10 @@ target_include_directories(booster_sdk_http_wrapper PRIVATE
   "${BOOSTER_SDK_INCLUDE_DIR}"
 )
 
+target_compile_definitions(booster_sdk_http_wrapper PRIVATE
+  BOOSTER_NATIVE_SDK_LAB_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
 target_link_libraries(booster_sdk_http_wrapper PRIVATE
   "${BOOSTER_SDK_LIBRARY}"
   ${FASTRTPS_LIB}
