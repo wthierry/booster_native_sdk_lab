@@ -7,8 +7,9 @@ Type=simple
 User=booster
 Environment=XDG_RUNTIME_DIR=/run/user/1007
 Environment=PULSE_SERVER=unix:/run/user/1007/pulse/native
+EnvironmentFile=/home/booster/Workspace/booster_native_sdk_lab/.env
 WorkingDirectory=/home/booster/Workspace/booster_native_sdk_lab
-ExecStart=/home/booster/Workspace/booster_native_sdk_lab/build/booster_sdk_http_wrapper
+ExecStart=/bin/bash -lc 'source /opt/ros/humble/setup.bash && source /home/booster/Workspace/booster_robotics_sdk_ros2/install/setup.bash && python3 /home/booster/Workspace/booster_native_sdk_lab/scripts/ros_camera_frame.py /tmp/booster_camera_preview.jpg >/tmp/booster_camera_preview.log 2>&1 & exec /home/booster/Workspace/booster_native_sdk_lab/build/booster_sdk_http_wrapper'
 Restart=always
 RestartSec=3
 

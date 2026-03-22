@@ -6,8 +6,20 @@ const debugWindow = document.getElementById("debug-window");
 const ttsText = document.getElementById("tts-text");
 const volumeSlider = document.getElementById("volume-slider");
 const volumeValue = document.getElementById("volume-value");
+const enableVideo = document.getElementById("enable-video");
+const videoPreview = document.getElementById("video-preview");
+const videoPlaceholder = document.getElementById("video-placeholder");
+const videoStatus = document.getElementById("video-status");
+const videoFrame = videoPreview.closest(".video-frame");
+const visionSummary = document.getElementById("vision-summary");
 const defaultVoiceType = "zh_female_shuangkuaisisi_emo_v2_mars_bigtts";
 let volumeUpdateTimer = null;
+let videoRefreshTimer = null;
+let lastHeardText = "";
+let lastSpokenText = "";
+let lastOpenAiVisionText = "";
+let lastOpenAiErrorText = "";
+let lastTriggerText = "";
 
 function appendDebug(title, payload) {
   const block = [
@@ -18,6 +30,12 @@ function appendDebug(title, payload) {
   debugWindow.textContent = debugWindow.textContent
     ? `${block}\n\n${debugWindow.textContent}`
     : block;
+}
+
+function setVisionSummary(text, isError = false) {
+  visionSummary.textContent = text;
+  visionSummary.classList.toggle("is-empty", !text);
+  visionSummary.classList.toggle("is-error", Boolean(text) && isError);
 }
 
 function renderBattery(battery) {
@@ -57,6 +75,52 @@ async function refreshBattery() {
   renderBattery(data.battery || {});
 }
 
+async function refreshSpeechDebug() {
+  const response = await fetch("/health");
+  const data = await response.json();
+  const speech = data?.wrapper?.speech_debug || {};
+  const heard = typeof speech.last_heard === "string" ? speech.last_heard.trim() : "";
+  const spoken = typeof speech.last_spoken === "string" ? speech.last_spoken.trim() : "";
+  const openAiVision =
+    typeof speech.last_openai_vision === "string" ? speech.last_openai_vision.trim() : "";
+  const openAiError =
+    typeof speech.last_openai_error === "string" ? speech.last_openai_error.trim() : "";
+  const trigger = typeof speech.last_trigger === "string" ? speech.last_trigger.trim() : "";
+
+  if (trigger) {
+    lastTriggerText = trigger;
+  }
+
+  if (heard && heard !== lastHeardText) {
+    lastHeardText = heard;
+    appendDebug("Robot heard", heard);
+  }
+
+  if (spoken && spoken !== lastSpokenText) {
+    lastSpokenText = spoken;
+    appendDebug("Robot said", spoken);
+  }
+
+  if (openAiVision && openAiVision !== lastOpenAiVisionText) {
+    lastOpenAiVisionText = openAiVision;
+    setVisionSummary(openAiVision, false);
+    appendDebug("Image description", lastTriggerText ? `Question: ${lastTriggerText}\n\n${openAiVision}` : openAiVision);
+  }
+
+  if (openAiError && openAiError !== lastOpenAiErrorText) {
+    lastOpenAiErrorText = openAiError;
+    setVisionSummary(`Vision error: ${openAiError}`, true);
+    appendDebug(
+      "Image description error",
+      lastTriggerText ? `Question: ${lastTriggerText}\n\n${openAiError}` : openAiError,
+    );
+  }
+
+  if (!openAiVision && !openAiError && !visionSummary.textContent.trim()) {
+    setVisionSummary("No image description yet.");
+  }
+}
+
 async function postJson(path, payload) {
   const response = await fetch(path, {
     method: "POST",
@@ -81,6 +145,45 @@ async function refreshVolume() {
   }
 }
 
+function setVideoPreviewState(isLive, message = "Video preview is off.") {
+  videoFrame.classList.toggle("is-live", isLive);
+  videoPlaceholder.textContent = message;
+}
+
+function refreshVideoPreview() {
+  videoPreview.src = `/camera/preview.jpg?t=${Date.now()}`;
+}
+
+function stopVideoPreview() {
+  if (videoRefreshTimer) {
+    window.clearInterval(videoRefreshTimer);
+    videoRefreshTimer = null;
+  }
+  videoPreview.removeAttribute("src");
+  videoStatus.textContent = "Off";
+  setVideoPreviewState(false, "Video preview is off.");
+}
+
+function startVideoPreview() {
+  if (videoRefreshTimer) {
+    return;
+  }
+  videoStatus.textContent = "Connecting...";
+  setVideoPreviewState(false, "Waiting for robot camera preview...");
+  refreshVideoPreview();
+  videoRefreshTimer = window.setInterval(refreshVideoPreview, 1200);
+}
+
+videoPreview.addEventListener("load", () => {
+  videoStatus.textContent = "Live";
+  setVideoPreviewState(true);
+});
+
+videoPreview.addEventListener("error", () => {
+  videoStatus.textContent = "No signal";
+  setVideoPreviewState(false, "Robot camera preview is not ready.");
+});
+
 document.getElementById("refresh-battery").addEventListener("click", () => {
   refreshBattery().catch((error) => {
     console.error("Refresh error", error);
@@ -88,7 +191,10 @@ document.getElementById("refresh-battery").addEventListener("click", () => {
 });
 
 document.getElementById("start-tts").addEventListener("click", () => {
-  const payload = { voice_type: defaultVoiceType };
+  const payload = {
+    voice_type: defaultVoiceType,
+    video_enabled: enableVideo.checked,
+  };
   appendDebug("/rtc/tts/start request", payload);
   postJson("/rtc/tts/start", payload).catch((error) => {
     appendDebug("Start listening error", String(error));
@@ -96,7 +202,10 @@ document.getElementById("start-tts").addEventListener("click", () => {
 });
 
 document.getElementById("speak-tts").addEventListener("click", () => {
-  const payload = { text: ttsText.value.trim() };
+  const payload = {
+    text: ttsText.value.trim(),
+    video_enabled: enableVideo.checked,
+  };
   appendDebug("/rtc/tts/speak request", payload);
 
   if (!payload.text) {
@@ -115,6 +224,14 @@ document.getElementById("stop-tts").addEventListener("click", () => {
   postJson("/rtc/tts/stop", payload).catch((error) => {
     appendDebug("Stop TTS error", String(error));
   });
+});
+
+enableVideo.addEventListener("change", () => {
+  if (enableVideo.checked) {
+    startVideoPreview();
+  } else {
+    stopVideoPreview();
+  }
 });
 
 volumeSlider.addEventListener("input", () => {
@@ -137,6 +254,12 @@ setInterval(() => {
   });
 }, 5000);
 
+setInterval(() => {
+  refreshSpeechDebug().catch((error) => {
+    console.error("Speech debug error", error);
+  });
+}, 1000);
+
 refreshBattery().catch((error) => {
   console.error("Initial refresh error", error);
 });
@@ -144,3 +267,11 @@ refreshBattery().catch((error) => {
 refreshVolume().catch((error) => {
   appendDebug("Initial volume error", String(error));
 });
+
+refreshSpeechDebug().catch((error) => {
+  appendDebug("Initial speech debug error", String(error));
+});
+
+setVideoPreviewState(false);
+videoStatus.textContent = "Off";
+setVisionSummary("No image description yet.");

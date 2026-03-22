@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 
 import json
+import os
 import re
 import subprocess
 import sys
 
 
 WELCOME_MSG = "Hello."
+VISUAL_CONTEXT_PATH = "/tmp/booster_visual_context.txt"
 SYSTEM_PROMPT = """
 ## prompt
 You're a robot named Booster that offers emotional chatting to users with a dry, sarcastic sense of humor.
@@ -15,6 +17,8 @@ Be witty, teasing, and lightly deadpan while still being genuinely helpful.
 Keep the sarcasm playful and clever, not cruel or bullying.
 Keep responses to 1 or 2 sentences when possible.
 Only give a longer, more detailed answer when the user is clearly asking a detailed question or requests more depth.
+If the user asks what you can see, what you see, what is in front of you, or any equivalent camera-vision question, do not answer the question yourself.
+For those vision questions, reply with exactly [vision_deferred] and nothing else.
 
 
 ## skill
@@ -33,16 +37,33 @@ def print_json(payload):
     print(json.dumps(payload, ensure_ascii=True))
 
 
+def build_system_prompt():
+    prompt = SYSTEM_PROMPT
+    try:
+        if os.path.exists(VISUAL_CONTEXT_PATH):
+            visual_context = open(VISUAL_CONTEXT_PATH, "r", encoding="utf-8").read().strip()
+            if visual_context:
+                prompt = (
+                    f"{prompt}\n\n## current_visual_context\n"
+                    "This is the latest camera description from the external vision system. "
+                    "Treat it as recent visual context that may be helpful, but do not mention it unless relevant.\n"
+                    f"{visual_context}"
+                )
+    except Exception:
+        pass
+    return prompt
+
+
 def parse_response(output):
-    status_match = re.search(r"status=(\d+)", output)
-    body_match = re.search(r"body='((?:\\'|[^'])*)'", output, re.DOTALL)
-    if not status_match:
+    status_matches = re.findall(r"status=(\d+)", output)
+    body_matches = re.findall(r"body='((?:\\'|[^'])*)'", output, re.DOTALL)
+    if not status_matches:
         return None
 
-    status = int(status_match.group(1))
+    status = int(status_matches[-1])
     body = ""
-    if body_match:
-        body = body_match.group(1).replace("\\'", "'")
+    if body_matches:
+        body = body_matches[-1].replace("\\'", "'")
 
     payload = {
         "ok": status == 0,
@@ -139,6 +160,7 @@ def main():
 
     if action == "start":
         voice_type = payload.get("voice_type", "zh_female_shuangkuaisisi_emo_v2_mars_bigtts")
+        system_prompt = build_system_prompt()
         body = json.dumps({
             "interrupt_mode": True,
             "asr_config": {
@@ -146,18 +168,19 @@ def main():
                 "interrupt_keywords": ["stop", "shut up"],
             },
             "llm_config": {
-                "system_prompt": SYSTEM_PROMPT,
+                "system_prompt": system_prompt,
                 "welcome_msg": WELCOME_MSG,
                 "prompt_name": "",
             },
             "tts_config": {
                 "voice_type": voice_type,
-                "ignore_bracket_text": [3],
+                "ignore_bracket_text": [3, 4],
             },
             "enable_face_tracking": False,
         })
         result = send_rpc(API_START_AI_CHAT, body, "start_tts")
         result["voice_type"] = voice_type
+        result["visual_context_loaded"] = system_prompt != SYSTEM_PROMPT
     elif action == "speak":
         text = str(payload.get("text", "")).strip()
         if not text:

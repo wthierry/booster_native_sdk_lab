@@ -41,6 +41,26 @@
           <textarea id="tts-text" class="tts-input" rows="4">hello from the ROS RTC TTS wrapper</textarea>
         </div>
 
+        <section class="video-panel" aria-labelledby="video-preview-title">
+          <div class="video-head">
+            <div>
+              <h3 id="video-preview-title" class="video-title">Video Preview</h3>
+              <p class="video-copy">Robot camera preview without browser camera permissions.</p>
+            </div>
+            <label class="video-toggle">
+              <input id="enable-video" type="checkbox">
+              <span>Enable video</span>
+            </label>
+          </div>
+          <div class="video-meta">
+            <span id="video-status" class="video-status">Off</span>
+          </div>
+          <div class="video-frame">
+            <img id="video-preview" class="video-preview" alt="Robot camera preview">
+            <div id="video-placeholder" class="video-placeholder">Video preview is off.</div>
+          </div>
+        </section>
+
         <div class="volume-panel">
           <div class="volume-head">
             <label class="tts-label" for="volume-slider">Speaker Volume</label>
@@ -48,6 +68,16 @@
           </div>
           <input id="volume-slider" class="volume-slider" type="range" min="0" max="150" step="1" value="100">
         </div>
+
+        <section class="vision-panel" aria-labelledby="vision-summary-title">
+          <div class="vision-head">
+            <div>
+              <h3 id="vision-summary-title" class="vision-title">Latest Image Description</h3>
+              <p class="vision-copy">This is the most recent OpenAI vision result from a spoken camera question.</p>
+            </div>
+          </div>
+          <div id="vision-summary" class="vision-summary is-empty">No image description yet.</div>
+        </section>
 
         <pre id="debug-window" class="debug-window"></pre>
       </section>

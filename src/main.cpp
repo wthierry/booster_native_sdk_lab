@@ -2,12 +2,15 @@
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
 
+#include <booster/idl/ai/Subtitle.h>
 #include <booster/idl/b1/BatteryState.h>
 #include <booster/robot/channel/channel_factory.hpp>
 #include <booster/robot/channel/channel_subscriber.hpp>
+#include <booster/robot/ai/const.hpp>
 #include <booster/third_party/nlohmann_json/json.hpp>
 
 #include <array>
+#include <chrono>
 #include <cstdlib>
 #include <cctype>
 #include <filesystem>
@@ -34,8 +37,11 @@ constexpr int kDefaultDomainId = 0;
 constexpr char kDefaultNetworkInterface[] = "lo";
 constexpr char kTopicBatteryState[] = "rt/battery_state";
 constexpr char kDefaultVoiceType[] = "zh_female_shuangkuaisisi_emo_v2_mars_bigtts";
+constexpr char kCameraPreviewPath[] = "/tmp/booster_camera_preview.jpg";
+constexpr char kVisualContextPath[] = "/tmp/booster_visual_context.txt";
 constexpr char kRosSetupScript[] = "/home/booster/Workspace/booster_robotics_sdk_ros2/install/setup.bash";
 constexpr char kRosTtsHelper[] = "scripts/ros_rtc_tts.py";
+constexpr char kOpenAiVisionHelper[] = "scripts/openai_vision.py";
 
 struct RuntimeOptions {
     std::string bind_address = kDefaultBindAddress;
@@ -66,6 +72,14 @@ std::string ReadFile(const std::string &path) {
     std::ostringstream buffer;
     buffer << input.rdbuf();
     return buffer.str();
+}
+
+void WriteFile(const std::string &path, const std::string &contents) {
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    if (!output) {
+        throw std::runtime_error("Unable to open file for writing: " + path);
+    }
+    output << contents;
 }
 
 std::string ContentTypeForPath(const std::string &path) {
@@ -133,8 +147,13 @@ std::string RunCommand(const std::string &command, int *exit_status = nullptr) {
     return output;
 }
 
-std::string ResolveRosTtsHelperPath() {
-    if (const char *override_path = std::getenv("BOOSTER_ROS_TTS_HELPER")) {
+std::string QuerylessPath(const std::string &target) {
+    const auto query_pos = target.find('?');
+    return target.substr(0, query_pos);
+}
+
+std::string ResolveScriptPath(const char *env_var, const char *relative_path) {
+    if (const char *override_path = std::getenv(env_var)) {
         const std::string configured = Trim(override_path);
         if (!configured.empty()) {
             return configured;
@@ -142,12 +161,12 @@ std::string ResolveRosTtsHelperPath() {
     }
 
     const std::filesystem::path repo_helper =
-        std::filesystem::path(BOOSTER_NATIVE_SDK_LAB_SOURCE_DIR) / kRosTtsHelper;
+        std::filesystem::path(BOOSTER_NATIVE_SDK_LAB_SOURCE_DIR) / relative_path;
     if (std::filesystem::exists(repo_helper)) {
         return repo_helper.string();
     }
 
-    return kRosTtsHelper;
+    return relative_path;
 }
 
 int ParsePercentValue(const std::string &text) {
@@ -163,6 +182,45 @@ int ParsePercentValue(const std::string &text) {
         throw std::runtime_error("Failed to parse volume percent");
     }
     return std::stoi(digits);
+}
+
+std::string ToLowerCopy(std::string value) {
+    for (char &ch : value) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    return value;
+}
+
+std::string NormalizeSpeechText(const std::string &text) {
+    std::string normalized;
+    normalized.reserve(text.size());
+    for (char ch : text) {
+        const unsigned char uch = static_cast<unsigned char>(ch);
+        if (std::isalnum(uch)) {
+            normalized.push_back(static_cast<char>(std::tolower(uch)));
+        } else {
+            normalized.push_back(' ');
+        }
+    }
+    return Trim(normalized);
+}
+
+bool IsVisionQuestion(const std::string &text) {
+    const auto normalized = NormalizeSpeechText(text);
+    if (normalized.find("what do you see") != std::string::npos ||
+        normalized.find("what can you see") != std::string::npos ||
+        normalized.find("what s in front of you") != std::string::npos ||
+        normalized.find("what is in front of you") != std::string::npos) {
+        return true;
+    }
+
+    return text.find("你看到什么") != std::string::npos ||
+           text.find("你看到了什么") != std::string::npos ||
+           text.find("你能看到什么") != std::string::npos ||
+           text.find("你看见什么") != std::string::npos ||
+           text.find("你能看见什么") != std::string::npos ||
+           text.find("看到什么") != std::string::npos ||
+           text.find("看到了什么") != std::string::npos;
 }
 
 class BatteryMonitor {
@@ -209,18 +267,35 @@ public:
         : network_interface_(std::move(network_interface)), domain_id_(domain_id) {
         booster::robot::ChannelFactory::Instance()->Init(domain_id_, network_interface_);
         battery_monitor_ = std::make_unique<BatteryMonitor>();
+        asr_monitor_ = std::make_unique<booster::robot::ChannelSubscriber<booster_interface::msg::Subtitle>>(
+            booster::robot::kTopicAiSubtitle,
+            [this](const void *msg) {
+                const auto *subtitle = static_cast<const booster_interface::msg::Subtitle *>(msg);
+                if (subtitle) {
+                    HandleSubtitle(*subtitle);
+                }
+            });
+        asr_monitor_->InitChannel();
     }
 
     json StatusJson() const {
+        std::scoped_lock lock(speech_mutex_);
         return {
             {"network_interface", network_interface_},
             {"domain_id", domain_id_},
             {"battery", battery_monitor_ ? battery_monitor_->ToJson() : json::object()},
             {"tts_transport", "ros_rtc_service"},
+            {"speech_debug", {
+                {"last_heard", last_heard_text_},
+                {"last_spoken", last_spoken_text_},
+                {"last_trigger", last_trigger_text_},
+                {"last_openai_vision", last_openai_vision_text_},
+                {"last_openai_error", last_openai_error_},
+            }},
         };
     }
 
-    json StartTts(const std::string &voice_type) {
+    json StartTts(const std::string &voice_type) const {
         return RunRosTtsHelper("start", {{"voice_type", voice_type}});
     }
 
@@ -228,7 +303,11 @@ public:
         return RunRosTtsHelper("stop", json::object());
     }
 
-    json SpeakTts(const std::string &text) {
+    json SpeakTts(const std::string &text) const {
+        {
+            std::scoped_lock lock(speech_mutex_);
+            last_spoken_text_ = text;
+        }
         return RunRosTtsHelper("speak", {{"text", text}});
     }
 
@@ -280,6 +359,102 @@ public:
     }
 
 private:
+    void HandleSubtitle(const booster_interface::msg::Subtitle &subtitle) {
+        const auto text = Trim(subtitle.text());
+        if (text.empty()) {
+            return;
+        }
+
+        const auto user_id = Trim(subtitle.user_id());
+        const bool from_robot = user_id == booster::robot::kBoosterRobotUserId;
+
+        {
+            std::scoped_lock lock(speech_mutex_);
+            if (from_robot) {
+                last_spoken_text_ = text;
+            } else {
+                last_heard_text_ = text;
+            }
+        }
+
+        if (from_robot || !IsVisionQuestion(text)) {
+            return;
+        }
+
+        const auto now = std::chrono::steady_clock::now();
+        {
+            std::scoped_lock lock(trigger_mutex_);
+            if (text == last_trigger_text_ &&
+                now - last_trigger_time_ < std::chrono::seconds(8)) {
+                return;
+            }
+            last_trigger_text_ = text;
+            last_trigger_time_ = now;
+        }
+
+        std::thread([this]() {
+            const json vision = AnalyzeCurrentImageWithOpenAi();
+            std::string answer;
+            if (vision.value("ok", false)) {
+                answer = Trim(vision.value("answer", std::string()));
+                std::scoped_lock lock(speech_mutex_);
+                last_openai_vision_text_ = answer;
+                last_openai_error_.clear();
+                if (!answer.empty()) {
+                    try {
+                        WriteFile(kVisualContextPath, answer);
+                    } catch (const std::exception &exc) {
+                        std::cerr << "Failed to update visual context: " << exc.what() << std::endl;
+                    }
+                }
+            } else {
+                const std::string error_summary =
+                    Trim(vision.value("error", std::string()) + " " + vision.value("response_body", std::string()));
+                std::scoped_lock lock(speech_mutex_);
+                last_openai_vision_text_.clear();
+                last_openai_error_ = error_summary;
+            }
+            if (answer.empty()) {
+                answer = "I can't make out the current camera view clearly right now.";
+            }
+            {
+                std::scoped_lock lock(speech_mutex_);
+                last_spoken_text_ = answer;
+            }
+            auto speak_result = RunRosTtsHelper("speak", {{"text", answer}});
+            if (!speak_result.value("ok", false)) {
+                std::cerr << "OpenAI vision speak failed: " << speak_result.dump() << std::endl;
+            }
+        }).detach();
+    }
+
+    json AnalyzeCurrentImageWithOpenAi() const {
+        const std::string prompt =
+            "The robot was asked 'what do you see?'. Reply in exactly 1 or 2 short spoken sentences. "
+            "Mention only the most important visible people, objects, or activity. If uncertain, say so briefly.";
+        const std::string command =
+            "python3 " +
+            ShellEscape(ResolveScriptPath("BOOSTER_OPENAI_VISION_HELPER", kOpenAiVisionHelper)) + " analyze " +
+            ShellEscape(json({
+                {"prompt", prompt},
+                {"image_path", kCameraPreviewPath},
+            }).dump());
+
+        int status = 0;
+        const auto output = RunCommand(command, &status);
+        json result = ParseJsonOrRawString(output);
+        if (!result.is_object()) {
+            return {
+                {"ok", false},
+                {"code", status},
+                {"error", "Unexpected OpenAI vision helper output"},
+                {"raw_output", Trim(output)},
+            };
+        }
+        result["helper_exit_status"] = status;
+        return result;
+    }
+
     json RunRosTtsHelper(const std::string &action, const json &payload) const {
         const std::string command =
             "source /opt/ros/humble/setup.bash >/dev/null 2>&1 && "
@@ -287,7 +462,8 @@ private:
             ShellEscape(kRosSetupScript) +
             " >/dev/null 2>&1 && "
             "python3 " +
-            ShellEscape(ResolveRosTtsHelperPath()) + " " + ShellEscape(action) + " " + ShellEscape(payload.dump());
+            ShellEscape(ResolveScriptPath("BOOSTER_ROS_TTS_HELPER", kRosTtsHelper)) + " " +
+            ShellEscape(action) + " " + ShellEscape(payload.dump());
 
         std::array<char, 512> buffer{};
         std::string output;
@@ -326,10 +502,18 @@ private:
         }
         return result;
     }
-
     std::string network_interface_;
     int domain_id_;
     std::unique_ptr<BatteryMonitor> battery_monitor_;
+    std::unique_ptr<booster::robot::ChannelSubscriber<booster_interface::msg::Subtitle>> asr_monitor_;
+    mutable std::mutex trigger_mutex_;
+    mutable std::mutex speech_mutex_;
+    mutable std::string last_heard_text_;
+    mutable std::string last_spoken_text_;
+    mutable std::string last_openai_vision_text_;
+    mutable std::string last_openai_error_;
+    std::string last_trigger_text_;
+    std::chrono::steady_clock::time_point last_trigger_time_{};
 };
 
 RuntimeOptions ParseArgs(int argc, char **argv) {
@@ -398,11 +582,24 @@ http::response<http::string_body> TextResponse(
     return res;
 }
 
+http::response<http::string_body> BinaryResponse(
+    http::status status,
+    std::string body,
+    const std::string &content_type) {
+    http::response<http::string_body> res{status, 11};
+    res.set(http::field::content_type, content_type);
+    res.set(http::field::cache_control, "no-store");
+    res.body() = std::move(body);
+    res.prepare_payload();
+    return res;
+}
+
 http::response<http::string_body> HandleRequest(
     const http::request<http::string_body> &req,
     BatteryWrapper &wrapper,
     const RuntimeOptions &options) {
-    const std::string path = std::string(req.target());
+    const std::string target = std::string(req.target());
+    const std::string path = QuerylessPath(target);
 
     if (req.method() == http::verb::get && (path == "/" || path == "/index.html")) {
         const auto file_path = options.web_root + "/index.html";
@@ -431,6 +628,27 @@ http::response<http::string_body> HandleRequest(
 
     if (req.method() == http::verb::get && path == "/audio/volume") {
         return JsonResponse(http::status::ok, wrapper.GetVolume());
+    }
+
+    if (req.method() == http::verb::get && path == "/camera/preview.jpg") {
+        try {
+            const std::string output_path = kCameraPreviewPath;
+            std::ifstream image_file(output_path, std::ios::binary);
+            if (!image_file) {
+                return JsonResponse(http::status::service_unavailable, {
+                    {"ok", false},
+                    {"error", "Camera preview not ready"},
+                    {"path", path},
+                });
+            }
+            return BinaryResponse(http::status::ok, ReadFile(output_path), "image/jpeg");
+        } catch (const std::exception &e) {
+            return JsonResponse(http::status::service_unavailable, {
+                {"ok", false},
+                {"error", e.what()},
+                {"path", path},
+            });
+        }
     }
 
     if (req.method() == http::verb::post && path == "/rtc/tts/start") {
