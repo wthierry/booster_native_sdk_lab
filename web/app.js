@@ -3,6 +3,7 @@ const batteryPercent = document.getElementById("battery-percent");
 const batteryDetails = document.getElementById("battery-details");
 const batteryPill = document.getElementById("battery-pill");
 const debugWindow = document.getElementById("debug-window");
+const copyDebugButton = document.getElementById("copy-debug");
 const ttsText = document.getElementById("tts-text");
 const volumeSlider = document.getElementById("volume-slider");
 const volumeValue = document.getElementById("volume-value");
@@ -15,11 +16,12 @@ const visionSummary = document.getElementById("vision-summary");
 const defaultVoiceType = "zh_female_shuangkuaisisi_emo_v2_mars_bigtts";
 let volumeUpdateTimer = null;
 let videoRefreshTimer = null;
+let visionRefreshTimer = null;
 let lastHeardText = "";
 let lastSpokenText = "";
 let lastOpenAiVisionText = "";
 let lastOpenAiErrorText = "";
-let lastTriggerText = "";
+let copyButtonTimer = null;
 
 function appendDebug(title, payload) {
   const block = [
@@ -30,6 +32,21 @@ function appendDebug(title, payload) {
   debugWindow.textContent = debugWindow.textContent
     ? `${block}\n\n${debugWindow.textContent}`
     : block;
+}
+
+function setCopyButtonState(label, copied = false) {
+  copyDebugButton.textContent = label;
+  copyDebugButton.classList.toggle("is-copied", copied);
+  if (copyButtonTimer) {
+    window.clearTimeout(copyButtonTimer);
+  }
+  if (label !== "Copy Log") {
+    copyButtonTimer = window.setTimeout(() => {
+      copyDebugButton.textContent = "Copy Log";
+      copyDebugButton.classList.remove("is-copied");
+      copyButtonTimer = null;
+    }, 1600);
+  }
 }
 
 function setVisionSummary(text, isError = false) {
@@ -85,11 +102,6 @@ async function refreshSpeechDebug() {
     typeof speech.last_openai_vision === "string" ? speech.last_openai_vision.trim() : "";
   const openAiError =
     typeof speech.last_openai_error === "string" ? speech.last_openai_error.trim() : "";
-  const trigger = typeof speech.last_trigger === "string" ? speech.last_trigger.trim() : "";
-
-  if (trigger) {
-    lastTriggerText = trigger;
-  }
 
   if (heard && heard !== lastHeardText) {
     lastHeardText = heard;
@@ -104,21 +116,34 @@ async function refreshSpeechDebug() {
   if (openAiVision && openAiVision !== lastOpenAiVisionText) {
     lastOpenAiVisionText = openAiVision;
     setVisionSummary(openAiVision, false);
-    appendDebug("Image description", lastTriggerText ? `Question: ${lastTriggerText}\n\n${openAiVision}` : openAiVision);
+    appendDebug("Image description", openAiVision);
   }
 
   if (openAiError && openAiError !== lastOpenAiErrorText) {
     lastOpenAiErrorText = openAiError;
     setVisionSummary(`Vision error: ${openAiError}`, true);
-    appendDebug(
-      "Image description error",
-      lastTriggerText ? `Question: ${lastTriggerText}\n\n${openAiError}` : openAiError,
-    );
+    appendDebug("Image description error", openAiError);
   }
 
   if (!openAiVision && !openAiError && !visionSummary.textContent.trim()) {
     setVisionSummary("No image description yet.");
   }
+}
+
+async function refreshVisualContext() {
+  const response = await fetch("/vision/refresh", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: "{}",
+  });
+  const data = await response.json();
+  if (!data.ok) {
+    appendDebug("Vision refresh error", data);
+  }
+  await refreshSpeechDebug();
+  return data;
 }
 
 async function postJson(path, payload) {
@@ -159,19 +184,33 @@ function stopVideoPreview() {
     window.clearInterval(videoRefreshTimer);
     videoRefreshTimer = null;
   }
+  if (visionRefreshTimer) {
+    window.clearInterval(visionRefreshTimer);
+    visionRefreshTimer = null;
+  }
   videoPreview.removeAttribute("src");
   videoStatus.textContent = "Off";
   setVideoPreviewState(false, "Video preview is off.");
 }
 
 function startVideoPreview() {
-  if (videoRefreshTimer) {
-    return;
+  if (!videoRefreshTimer) {
+    videoStatus.textContent = "Connecting...";
+    setVideoPreviewState(false, "Waiting for robot camera preview...");
+    refreshVideoPreview();
+    videoRefreshTimer = window.setInterval(refreshVideoPreview, 1200);
   }
-  videoStatus.textContent = "Connecting...";
-  setVideoPreviewState(false, "Waiting for robot camera preview...");
-  refreshVideoPreview();
-  videoRefreshTimer = window.setInterval(refreshVideoPreview, 1200);
+
+  if (!visionRefreshTimer) {
+    refreshVisualContext().catch((error) => {
+      appendDebug("Vision refresh error", String(error));
+    });
+    visionRefreshTimer = window.setInterval(() => {
+      refreshVisualContext().catch((error) => {
+        appendDebug("Vision refresh error", String(error));
+      });
+    }, 6000);
+  }
 }
 
 videoPreview.addEventListener("load", () => {
@@ -234,6 +273,22 @@ enableVideo.addEventListener("change", () => {
   }
 });
 
+copyDebugButton.addEventListener("click", async () => {
+  const text = debugWindow.textContent.trim();
+  if (!text) {
+    setCopyButtonState("Nothing to copy");
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(text);
+    setCopyButtonState("Copied", true);
+  } catch (error) {
+    setCopyButtonState("Copy failed");
+    appendDebug("Copy error", String(error));
+  }
+});
+
 volumeSlider.addEventListener("input", () => {
   volumeValue.textContent = `${volumeSlider.value}%`;
   if (volumeUpdateTimer) {
@@ -275,3 +330,4 @@ refreshSpeechDebug().catch((error) => {
 setVideoPreviewState(false);
 videoStatus.textContent = "Off";
 setVisionSummary("No image description yet.");
+setCopyButtonState("Copy Log");

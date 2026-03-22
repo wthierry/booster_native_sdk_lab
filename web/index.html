@@ -79,7 +79,16 @@
           <div id="vision-summary" class="vision-summary is-empty">No image description yet.</div>
         </section>
 
-        <pre id="debug-window" class="debug-window"></pre>
+        <section class="debug-panel" aria-labelledby="debug-title">
+          <div class="debug-head">
+            <div>
+              <h3 id="debug-title" class="vision-title">Debug Log</h3>
+              <p class="vision-copy">Live requests, transcript events, and vision activity.</p>
+            </div>
+            <button id="copy-debug" class="ghost" type="button">Copy Log</button>
+          </div>
+          <pre id="debug-window" class="debug-window"></pre>
+        </section>
       </section>
     </main>
 

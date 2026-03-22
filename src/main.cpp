@@ -4,13 +4,12 @@
 
 #include <booster/idl/ai/Subtitle.h>
 #include <booster/idl/b1/BatteryState.h>
+#include <booster/robot/ai/const.hpp>
 #include <booster/robot/channel/channel_factory.hpp>
 #include <booster/robot/channel/channel_subscriber.hpp>
-#include <booster/robot/ai/const.hpp>
 #include <booster/third_party/nlohmann_json/json.hpp>
 
 #include <array>
-#include <chrono>
 #include <cstdlib>
 #include <cctype>
 #include <filesystem>
@@ -38,7 +37,6 @@ constexpr char kDefaultNetworkInterface[] = "lo";
 constexpr char kTopicBatteryState[] = "rt/battery_state";
 constexpr char kDefaultVoiceType[] = "zh_female_shuangkuaisisi_emo_v2_mars_bigtts";
 constexpr char kCameraPreviewPath[] = "/tmp/booster_camera_preview.jpg";
-constexpr char kVisualContextPath[] = "/tmp/booster_visual_context.txt";
 constexpr char kRosSetupScript[] = "/home/booster/Workspace/booster_robotics_sdk_ros2/install/setup.bash";
 constexpr char kRosTtsHelper[] = "scripts/ros_rtc_tts.py";
 constexpr char kOpenAiVisionHelper[] = "scripts/openai_vision.py";
@@ -72,14 +70,6 @@ std::string ReadFile(const std::string &path) {
     std::ostringstream buffer;
     buffer << input.rdbuf();
     return buffer.str();
-}
-
-void WriteFile(const std::string &path, const std::string &contents) {
-    std::ofstream output(path, std::ios::binary | std::ios::trunc);
-    if (!output) {
-        throw std::runtime_error("Unable to open file for writing: " + path);
-    }
-    output << contents;
 }
 
 std::string ContentTypeForPath(const std::string &path) {
@@ -184,45 +174,6 @@ int ParsePercentValue(const std::string &text) {
     return std::stoi(digits);
 }
 
-std::string ToLowerCopy(std::string value) {
-    for (char &ch : value) {
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    }
-    return value;
-}
-
-std::string NormalizeSpeechText(const std::string &text) {
-    std::string normalized;
-    normalized.reserve(text.size());
-    for (char ch : text) {
-        const unsigned char uch = static_cast<unsigned char>(ch);
-        if (std::isalnum(uch)) {
-            normalized.push_back(static_cast<char>(std::tolower(uch)));
-        } else {
-            normalized.push_back(' ');
-        }
-    }
-    return Trim(normalized);
-}
-
-bool IsVisionQuestion(const std::string &text) {
-    const auto normalized = NormalizeSpeechText(text);
-    if (normalized.find("what do you see") != std::string::npos ||
-        normalized.find("what can you see") != std::string::npos ||
-        normalized.find("what s in front of you") != std::string::npos ||
-        normalized.find("what is in front of you") != std::string::npos) {
-        return true;
-    }
-
-    return text.find("你看到什么") != std::string::npos ||
-           text.find("你看到了什么") != std::string::npos ||
-           text.find("你能看到什么") != std::string::npos ||
-           text.find("你看见什么") != std::string::npos ||
-           text.find("你能看见什么") != std::string::npos ||
-           text.find("看到什么") != std::string::npos ||
-           text.find("看到了什么") != std::string::npos;
-}
-
 class BatteryMonitor {
 public:
     BatteryMonitor()
@@ -288,11 +239,31 @@ public:
             {"speech_debug", {
                 {"last_heard", last_heard_text_},
                 {"last_spoken", last_spoken_text_},
-                {"last_trigger", last_trigger_text_},
                 {"last_openai_vision", last_openai_vision_text_},
                 {"last_openai_error", last_openai_error_},
             }},
         };
+    }
+
+    json RefreshVisualContext() const {
+        std::scoped_lock vision_lock(vision_mutex_);
+        json vision = AnalyzeCurrentImageWithOpenAi();
+        if (vision.value("ok", false)) {
+            const std::string answer = Trim(vision.value("answer", std::string()));
+            {
+                std::scoped_lock lock(speech_mutex_);
+                last_openai_vision_text_ = answer;
+                last_openai_error_.clear();
+            }
+        } else {
+            const std::string error_summary =
+                Trim(vision.value("error", std::string()) + " " + vision.value("response_body", std::string()));
+            std::scoped_lock lock(speech_mutex_);
+            last_openai_vision_text_.clear();
+            last_openai_error_ = error_summary;
+        }
+        vision["action"] = "refresh_visual_context";
+        return vision;
     }
 
     json StartTts(const std::string &voice_type) const {
@@ -376,56 +347,6 @@ private:
                 last_heard_text_ = text;
             }
         }
-
-        if (from_robot || !IsVisionQuestion(text)) {
-            return;
-        }
-
-        const auto now = std::chrono::steady_clock::now();
-        {
-            std::scoped_lock lock(trigger_mutex_);
-            if (text == last_trigger_text_ &&
-                now - last_trigger_time_ < std::chrono::seconds(8)) {
-                return;
-            }
-            last_trigger_text_ = text;
-            last_trigger_time_ = now;
-        }
-
-        std::thread([this]() {
-            const json vision = AnalyzeCurrentImageWithOpenAi();
-            std::string answer;
-            if (vision.value("ok", false)) {
-                answer = Trim(vision.value("answer", std::string()));
-                std::scoped_lock lock(speech_mutex_);
-                last_openai_vision_text_ = answer;
-                last_openai_error_.clear();
-                if (!answer.empty()) {
-                    try {
-                        WriteFile(kVisualContextPath, answer);
-                    } catch (const std::exception &exc) {
-                        std::cerr << "Failed to update visual context: " << exc.what() << std::endl;
-                    }
-                }
-            } else {
-                const std::string error_summary =
-                    Trim(vision.value("error", std::string()) + " " + vision.value("response_body", std::string()));
-                std::scoped_lock lock(speech_mutex_);
-                last_openai_vision_text_.clear();
-                last_openai_error_ = error_summary;
-            }
-            if (answer.empty()) {
-                answer = "I can't make out the current camera view clearly right now.";
-            }
-            {
-                std::scoped_lock lock(speech_mutex_);
-                last_spoken_text_ = answer;
-            }
-            auto speak_result = RunRosTtsHelper("speak", {{"text", answer}});
-            if (!speak_result.value("ok", false)) {
-                std::cerr << "OpenAI vision speak failed: " << speak_result.dump() << std::endl;
-            }
-        }).detach();
     }
 
     json AnalyzeCurrentImageWithOpenAi() const {
@@ -506,14 +427,12 @@ private:
     int domain_id_;
     std::unique_ptr<BatteryMonitor> battery_monitor_;
     std::unique_ptr<booster::robot::ChannelSubscriber<booster_interface::msg::Subtitle>> asr_monitor_;
-    mutable std::mutex trigger_mutex_;
+    mutable std::mutex vision_mutex_;
     mutable std::mutex speech_mutex_;
     mutable std::string last_heard_text_;
     mutable std::string last_spoken_text_;
     mutable std::string last_openai_vision_text_;
     mutable std::string last_openai_error_;
-    std::string last_trigger_text_;
-    std::chrono::steady_clock::time_point last_trigger_time_{};
 };
 
 RuntimeOptions ParseArgs(int argc, char **argv) {
@@ -688,6 +607,10 @@ http::response<http::string_body> HandleRequest(
                 {"path", path},
             });
         }
+    }
+
+    if (req.method() == http::verb::post && path == "/vision/refresh") {
+        return JsonResponse(http::status::ok, wrapper.RefreshVisualContext());
     }
 
     if (req.method() == http::verb::post && path == "/audio/volume") {

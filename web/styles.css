@@ -342,13 +342,65 @@ button {
   border-radius: 999px;
   padding: 11px 16px;
   cursor: pointer;
-  background: transparent;
+  background: rgba(255, 255, 255, 0.72);
   color: var(--ink);
+  transition:
+    transform 120ms ease,
+    background-color 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    color 120ms ease;
+}
+
+button:hover {
+  background: rgba(255, 255, 255, 0.94);
+  border-color: rgba(201, 92, 43, 0.35);
+  box-shadow: 0 8px 18px rgba(71, 48, 23, 0.08);
+}
+
+button:active {
+  transform: translateY(1px) scale(0.99);
+  background: rgba(244, 232, 220, 0.96);
+}
+
+button:focus-visible {
+  outline: 2px solid rgba(201, 92, 43, 0.34);
+  outline-offset: 3px;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: default;
+  box-shadow: none;
+}
+
+.ghost {
+  background: rgba(255, 255, 255, 0.68);
+}
+
+.ghost.is-copied {
+  background: rgba(217, 236, 212, 0.95);
+  border-color: rgba(33, 75, 32, 0.25);
+  color: #214b20;
+}
+
+.debug-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.debug-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
 }
 
 .debug-window {
   margin: 0;
   min-height: 220px;
+  max-height: 360px;
   overflow: auto;
   padding: 16px;
   border-radius: 16px;
@@ -358,6 +410,23 @@ button {
   font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
   font-size: 13px;
   line-height: 1.5;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(201, 92, 43, 0.8) rgba(255, 255, 255, 0.08);
+}
+
+.debug-window::-webkit-scrollbar {
+  width: 12px;
+}
+
+.debug-window::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 999px;
+}
+
+.debug-window::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(201, 92, 43, 0.95), rgba(216, 157, 45, 0.85));
+  border-radius: 999px;
+  border: 2px solid #181512;
 }
 
 @media (max-width: 700px) {
@@ -367,6 +436,11 @@ button {
   }
 
   .video-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .debug-head {
     align-items: flex-start;
     flex-direction: column;
   }
