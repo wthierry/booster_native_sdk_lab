@@ -116,13 +116,11 @@ async function refreshSpeechDebug() {
   if (openAiVision && openAiVision !== lastOpenAiVisionText) {
     lastOpenAiVisionText = openAiVision;
     setVisionSummary(openAiVision, false);
-    appendDebug("Image description", openAiVision);
   }
 
   if (openAiError && openAiError !== lastOpenAiErrorText) {
     lastOpenAiErrorText = openAiError;
     setVisionSummary(`Vision error: ${openAiError}`, true);
-    appendDebug("Image description error", openAiError);
   }
 
   if (!openAiVision && !openAiError && !visionSummary.textContent.trim()) {
@@ -229,15 +227,17 @@ document.getElementById("refresh-battery").addEventListener("click", () => {
   });
 });
 
-document.getElementById("start-tts").addEventListener("click", () => {
+document.getElementById("start-tts").addEventListener("click", async () => {
   const payload = {
     voice_type: defaultVoiceType,
     video_enabled: enableVideo.checked,
   };
   appendDebug("/rtc/tts/start request", payload);
-  postJson("/rtc/tts/start", payload).catch((error) => {
+  try {
+    await postJson("/rtc/tts/start", payload);
+  } catch (error) {
     appendDebug("Start listening error", String(error));
-  });
+  }
 });
 
 document.getElementById("speak-tts").addEventListener("click", () => {
@@ -257,12 +257,14 @@ document.getElementById("speak-tts").addEventListener("click", () => {
   });
 });
 
-document.getElementById("stop-tts").addEventListener("click", () => {
+document.getElementById("stop-tts").addEventListener("click", async () => {
   const payload = {};
   appendDebug("/rtc/tts/stop request", payload);
-  postJson("/rtc/tts/stop", payload).catch((error) => {
+  try {
+    await postJson("/rtc/tts/stop", payload);
+  } catch (error) {
     appendDebug("Stop TTS error", String(error));
-  });
+  }
 });
 
 enableVideo.addEventListener("change", () => {

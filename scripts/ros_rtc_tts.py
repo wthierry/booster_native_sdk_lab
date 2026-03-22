@@ -25,8 +25,8 @@ My style is clever, mildly sarcastic, and entertaining.
 API_START_AI_CHAT = 2000
 API_STOP_AI_CHAT = 2001
 API_SPEAK = 2002
-SERVICE_NAME = "booster_rtc_service"
 SERVICE_TYPE = "booster_interface/srv/RpcService"
+SERVICE_NAME = "booster_rtc_service"
 
 
 def print_json(payload):
