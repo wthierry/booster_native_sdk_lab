@@ -24,6 +24,7 @@
                 <button id="start-tts" class="ghost">Start Listening</button>
                 <button id="speak-tts" class="ghost">Speak</button>
                 <button id="stop-tts" class="ghost">Stop TTS</button>
+                <button id="wave-hand" class="ghost">Wave Hand</button>
               </div>
             </div>
 
@@ -44,11 +45,9 @@
             </div>
 
             <div class="mode-row">
-              <label id="asr-only-toggle" class="video-toggle is-disabled" for="asr-only">
-                <input id="asr-only" type="checkbox" disabled>
-                <span>ASR Only</span>
-              </label>
-              <p id="asr-only-note" class="mode-note">Disabled for now.</p>
+              <label class="tts-label" for="mode-select">Mode</label>
+              <select id="mode-select" class="mode-select" aria-describedby="mode-note"></select>
+              <p id="mode-note" class="mode-note">Loading current mode...</p>
             </div>
 
             <div class="volume-panel">

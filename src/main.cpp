@@ -4,12 +4,17 @@
 
 #include <booster/idl/ai/Subtitle.h>
 #include <booster/idl/b1/BatteryState.h>
+#include <booster/idl/b1/RobotStates.h>
+#include <booster/robot/b1/b1_api_const.hpp>
+#include <booster/robot/b1/b1_loco_client.hpp>
 #include <booster/robot/ai/const.hpp>
 #include <booster/robot/channel/channel_factory.hpp>
 #include <booster/robot/channel/channel_subscriber.hpp>
+#include <booster/robot/common/robot_shared.hpp>
 #include <booster/third_party/nlohmann_json/json.hpp>
 
 #include <array>
+#include <chrono>
 #include <cstdlib>
 #include <cctype>
 #include <filesystem>
@@ -40,6 +45,23 @@ constexpr char kCameraPreviewPath[] = "/tmp/booster_camera_preview.jpg";
 constexpr char kRosSetupScript[] = "/home/booster/Workspace/booster_robotics_sdk_ros2/install/setup.bash";
 constexpr char kRosTtsHelper[] = "scripts/ros_rtc_tts.py";
 constexpr char kOpenAiVisionHelper[] = "scripts/openai_vision.py";
+constexpr int kDefaultInterruptSpeechDurationMs = 200;
+constexpr booster::robot::RobotMode kDefaultRobotMode = booster::robot::RobotMode::kUnknown;
+
+struct RobotModeOption {
+    const char *id;
+    const char *label;
+    const char *description;
+    booster::robot::RobotMode value;
+};
+
+constexpr std::array<RobotModeOption, 5> kRobotModes{{
+    {"damping", "Damp", "Low-level damping mode.", booster::robot::RobotMode::kDamping},
+    {"prepare", "Prepare", "Balanced standing mode.", booster::robot::RobotMode::kPrepare},
+    {"walking", "Walking", "Walking locomotion mode.", booster::robot::RobotMode::kWalking},
+    {"custom", "Custom", "Custom behavior mode.", booster::robot::RobotMode::kCustom},
+    {"soccer", "Soccer", "Soccer behavior mode.", booster::robot::RobotMode::kSoccer},
+}};
 
 struct RuntimeOptions {
     std::string bind_address = kDefaultBindAddress;
@@ -174,6 +196,56 @@ int ParsePercentValue(const std::string &text) {
     return std::stoi(digits);
 }
 
+const RobotModeOption *FindRobotModeById(const std::string &id) {
+    for (const auto &option : kRobotModes) {
+        if (id == option.id) {
+            return &option;
+        }
+    }
+    return nullptr;
+}
+
+const RobotModeOption *FindRobotModeByValue(booster::robot::RobotMode mode) {
+    for (const auto &option : kRobotModes) {
+        if (mode == option.value) {
+            return &option;
+        }
+    }
+    return nullptr;
+}
+
+json RobotModeOptionsJson() {
+    json options = json::array();
+    for (const auto &option : kRobotModes) {
+        options.push_back({
+            {"id", option.id},
+            {"label", option.label},
+            {"description", option.description},
+            {"value", static_cast<int>(option.value)},
+        });
+    }
+    return options;
+}
+
+json RobotModeStateJson(booster::robot::RobotMode mode) {
+    const auto *option = FindRobotModeByValue(mode);
+    if (option) {
+        return {
+            {"id", option->id},
+            {"label", option->label},
+            {"description", option->description},
+            {"value", static_cast<int>(option->value)},
+        };
+    }
+
+    return {
+        {"id", "unknown"},
+        {"label", "Unknown"},
+        {"description", "Robot mode is not available yet."},
+        {"value", static_cast<int>(mode)},
+    };
+}
+
 class BatteryMonitor {
 public:
     BatteryMonitor()
@@ -217,6 +289,8 @@ public:
     explicit BatteryWrapper(std::string network_interface, int domain_id)
         : network_interface_(std::move(network_interface)), domain_id_(domain_id) {
         booster::robot::ChannelFactory::Instance()->Init(domain_id_, network_interface_);
+        loco_client_ = std::make_unique<booster::robot::b1::B1LocoClient>();
+        loco_client_->Init();
         battery_monitor_ = std::make_unique<BatteryMonitor>();
         asr_monitor_ = std::make_unique<booster::robot::ChannelSubscriber<booster_interface::msg::Subtitle>>(
             booster::robot::kTopicAiSubtitle,
@@ -227,15 +301,28 @@ public:
                 }
             });
         asr_monitor_->InitChannel();
+        robot_state_monitor_ = std::make_unique<booster::robot::ChannelSubscriber<booster_interface::msg::RobotStatesMsg>>(
+            booster::robot::b1::kTopicRobotStates,
+            [this](const void *msg) {
+                const auto *state = static_cast<const booster_interface::msg::RobotStatesMsg *>(msg);
+                if (state) {
+                    HandleRobotState(*state);
+                }
+            });
+        robot_state_monitor_->InitChannel();
     }
 
     json StatusJson() const {
-        std::scoped_lock lock(speech_mutex_);
+        std::scoped_lock lock(speech_mutex_, robot_mode_mutex_);
         return {
             {"network_interface", network_interface_},
             {"domain_id", domain_id_},
             {"battery", battery_monitor_ ? battery_monitor_->ToJson() : json::object()},
             {"tts_transport", "ros_rtc_service"},
+            {"robot_mode", {
+                {"current", RobotModeStateJson(current_robot_mode_)},
+                {"options", RobotModeOptionsJson()},
+            }},
             {"speech_debug", {
                 {"last_heard", last_heard_text_},
                 {"last_spoken", last_spoken_text_},
@@ -266,8 +353,25 @@ public:
         return vision;
     }
 
-    json StartTts(const std::string &voice_type) const {
-        return RunRosTtsHelper("start", {{"voice_type", voice_type}});
+    json StartTts(const std::string &voice_type,
+                  int interrupt_speech_duration_ms = kDefaultInterruptSpeechDurationMs) const {
+        const json payload = {
+            {"voice_type", voice_type},
+            {"interrupt_speech_duration", interrupt_speech_duration_ms},
+        };
+
+        json result = RunRosTtsHelper("start", payload);
+        const std::string response_body = Trim(result.value("response_body", std::string()));
+        if (result.value("ok", false) || response_body != "Start chat failed") {
+            return result;
+        }
+
+        const json stop_result = RunRosTtsHelper("stop", json::object());
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        json retry_result = RunRosTtsHelper("start", payload);
+        retry_result["recovered_after_restart"] = retry_result.value("ok", false);
+        retry_result["auto_stop_result"] = stop_result;
+        return retry_result;
     }
 
     json StopTts() {
@@ -280,6 +384,67 @@ public:
             last_spoken_text_ = text;
         }
         return RunRosTtsHelper("speak", {{"text", text}});
+    }
+
+    json RobotModeJson() const {
+        std::scoped_lock lock(robot_mode_mutex_);
+        return {
+            {"ok", true},
+            {"current_mode", RobotModeStateJson(current_robot_mode_)},
+            {"modes", RobotModeOptionsJson()},
+        };
+    }
+
+    json SetRobotMode(const std::string &mode) {
+        const std::string trimmed = Trim(mode);
+        const auto *option = FindRobotModeById(trimmed);
+        if (!option) {
+            return {
+                {"ok", false},
+                {"error", "Unsupported mode"},
+                {"requested_mode", trimmed},
+                {"modes", RobotModeOptionsJson()},
+            };
+        }
+
+        const int32_t status = loco_client_->ChangeMode(option->value);
+        if (status != 0) {
+            return {
+                {"ok", false},
+                {"error", "Failed to change robot mode"},
+                {"code", status},
+                {"requested_mode", trimmed},
+                {"current_mode", CurrentRobotModeJson()},
+                {"modes", RobotModeOptionsJson()},
+            };
+        }
+
+        {
+            std::scoped_lock lock(robot_mode_mutex_);
+            current_robot_mode_ = option->value;
+        }
+        return {
+            {"ok", true},
+            {"current_mode", CurrentRobotModeJson()},
+            {"modes", RobotModeOptionsJson()},
+        };
+    }
+
+    json WaveHand() const {
+        const int32_t status = loco_client_->WaveHand(booster::robot::b1::HandAction::kHandOpen);
+        if (status != 0) {
+            return {
+                {"ok", false},
+                {"error", "Failed to wave hand"},
+                {"code", status},
+            };
+        }
+
+        return {
+            {"ok", true},
+            {"action", "wave_hand"},
+            {"hand", "right"},
+        };
     }
 
     json GetVolume() const {
@@ -330,6 +495,16 @@ public:
     }
 
 private:
+    json CurrentRobotModeJson() const {
+        std::scoped_lock lock(robot_mode_mutex_);
+        return RobotModeStateJson(current_robot_mode_);
+    }
+
+    void HandleRobotState(const booster_interface::msg::RobotStatesMsg &state) {
+        std::scoped_lock lock(robot_mode_mutex_);
+        current_robot_mode_ = static_cast<booster::robot::RobotMode>(state.current_mode());
+    }
+
     void HandleSubtitle(const booster_interface::msg::Subtitle &subtitle) {
         const auto text = Trim(subtitle.text());
         if (text.empty()) {
@@ -425,14 +600,18 @@ private:
     }
     std::string network_interface_;
     int domain_id_;
+    std::unique_ptr<booster::robot::b1::B1LocoClient> loco_client_;
     std::unique_ptr<BatteryMonitor> battery_monitor_;
     std::unique_ptr<booster::robot::ChannelSubscriber<booster_interface::msg::Subtitle>> asr_monitor_;
+    std::unique_ptr<booster::robot::ChannelSubscriber<booster_interface::msg::RobotStatesMsg>> robot_state_monitor_;
     mutable std::mutex vision_mutex_;
     mutable std::mutex speech_mutex_;
+    mutable std::mutex robot_mode_mutex_;
     mutable std::string last_heard_text_;
     mutable std::string last_spoken_text_;
     mutable std::string last_openai_vision_text_;
     mutable std::string last_openai_error_;
+    booster::robot::RobotMode current_robot_mode_ = kDefaultRobotMode;
 };
 
 RuntimeOptions ParseArgs(int argc, char **argv) {
@@ -549,6 +728,10 @@ http::response<http::string_body> HandleRequest(
         return JsonResponse(http::status::ok, wrapper.GetVolume());
     }
 
+    if (req.method() == http::verb::get && path == "/robot/mode") {
+        return JsonResponse(http::status::ok, wrapper.RobotModeJson());
+    }
+
     if (req.method() == http::verb::get && path == "/camera/preview.jpg") {
         try {
             const std::string output_path = kCameraPreviewPath;
@@ -574,7 +757,9 @@ http::response<http::string_body> HandleRequest(
         try {
             const json body = ParseOptionalJsonBody(req.body());
             const auto voice_type = body.value("voice_type", std::string(kDefaultVoiceType));
-            return JsonResponse(http::status::ok, wrapper.StartTts(voice_type));
+            const int interrupt_speech_duration_ms =
+                std::max(0, body.value("interrupt_speech_duration", kDefaultInterruptSpeechDurationMs));
+            return JsonResponse(http::status::ok, wrapper.StartTts(voice_type, interrupt_speech_duration_ms));
         } catch (const std::exception &e) {
             return JsonResponse(http::status::bad_request, {
                 {"ok", false},
@@ -613,11 +798,33 @@ http::response<http::string_body> HandleRequest(
         return JsonResponse(http::status::ok, wrapper.RefreshVisualContext());
     }
 
+    if (req.method() == http::verb::post && path == "/robot/wave-hand") {
+        const auto result = wrapper.WaveHand();
+        const auto status = result.value("ok", false) ? http::status::ok : http::status::bad_request;
+        return JsonResponse(status, result);
+    }
+
     if (req.method() == http::verb::post && path == "/audio/volume") {
         try {
             const json body = ParseOptionalJsonBody(req.body());
             const int volume_percent = body.at("volume_percent").get<int>();
             return JsonResponse(http::status::ok, wrapper.SetVolume(volume_percent));
+        } catch (const std::exception &e) {
+            return JsonResponse(http::status::bad_request, {
+                {"ok", false},
+                {"error", e.what()},
+                {"path", path},
+            });
+        }
+    }
+
+    if (req.method() == http::verb::post && path == "/robot/mode") {
+        try {
+            const json body = ParseOptionalJsonBody(req.body());
+            const auto mode = body.at("mode").get<std::string>();
+            const auto result = wrapper.SetRobotMode(mode);
+            const auto status = result.value("ok", false) ? http::status::ok : http::status::bad_request;
+            return JsonResponse(status, result);
         } catch (const std::exception &e) {
             return JsonResponse(http::status::bad_request, {
                 {"ok", false},

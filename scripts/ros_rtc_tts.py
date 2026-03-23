@@ -25,8 +25,12 @@ My style is clever, mildly sarcastic, and entertaining.
 API_START_AI_CHAT = 2000
 API_STOP_AI_CHAT = 2001
 API_SPEAK = 2002
+API_START_ASR = 1000
+API_STOP_ASR = 1001
 SERVICE_TYPE = "booster_interface/srv/RpcService"
 SERVICE_NAME = "booster_rtc_service"
+DEFAULT_INTERRUPT_SPEECH_DURATION_MS = 200
+DEFAULT_INTERRUPT_KEYWORDS = ["stop", "shut up"]
 
 
 def print_json(payload):
@@ -139,25 +143,51 @@ def main():
 
     if action == "start":
         voice_type = payload.get("voice_type", "zh_female_shuangkuaisisi_emo_v2_mars_bigtts")
-        body = json.dumps({
-            "interrupt_mode": True,
-            "asr_config": {
-                "interrupt_speech_duration": 200,
-                "interrupt_keywords": ["stop", "shut up"],
-            },
-            "llm_config": {
-                "system_prompt": SYSTEM_PROMPT,
-                "welcome_msg": WELCOME_MSG,
-                "prompt_name": "",
-            },
-            "tts_config": {
-                "voice_type": voice_type,
-                "ignore_bracket_text": [3],
-            },
-            "enable_face_tracking": False,
-        })
-        result = send_rpc(API_START_AI_CHAT, body, "start_tts")
+        mode = str(payload.get("mode", "conversation")).strip() or "conversation"
+        interrupt_speech_duration = int(
+            payload.get("interrupt_speech_duration", DEFAULT_INTERRUPT_SPEECH_DURATION_MS)
+        )
+        if interrupt_speech_duration < 0:
+            interrupt_speech_duration = DEFAULT_INTERRUPT_SPEECH_DURATION_MS
+        interrupt_keywords = payload.get("interrupt_keywords", DEFAULT_INTERRUPT_KEYWORDS)
+        if not isinstance(interrupt_keywords, list):
+            interrupt_keywords = list(DEFAULT_INTERRUPT_KEYWORDS)
+        interrupt_keywords = [str(keyword).strip() for keyword in interrupt_keywords if str(keyword).strip()]
+        if not interrupt_keywords:
+            interrupt_keywords = list(DEFAULT_INTERRUPT_KEYWORDS)
+        if mode == "conversation":
+            body = json.dumps({
+                "interrupt_mode": True,
+                "asr_config": {
+                    "interrupt_speech_duration": interrupt_speech_duration,
+                    "interrupt_keywords": interrupt_keywords,
+                },
+                "llm_config": {
+                    "system_prompt": SYSTEM_PROMPT,
+                    "welcome_msg": WELCOME_MSG,
+                    "prompt_name": "",
+                },
+                "tts_config": {
+                    "voice_type": voice_type,
+                    "ignore_bracket_text": [3],
+                },
+                "enable_face_tracking": False,
+            })
+            result = send_rpc(API_START_AI_CHAT, body, "start_tts")
+        elif mode == "asr_only":
+            result = send_rpc(API_START_ASR, "", "start_asr")
+        else:
+            print_json({
+                "ok": False,
+                "code": 400,
+                "action": "start",
+                "error": f"Unknown mode: {mode}",
+            })
+            return 1
         result["voice_type"] = voice_type
+        result["mode"] = mode
+        result["interrupt_speech_duration"] = interrupt_speech_duration
+        result["interrupt_keywords"] = interrupt_keywords
     elif action == "speak":
         text = str(payload.get("text", "")).strip()
         if not text:
@@ -171,7 +201,20 @@ def main():
         result = send_rpc(API_SPEAK, json.dumps({"msg": text}), "speak_tts")
         result["text"] = text
     elif action == "stop":
-        result = send_rpc(API_STOP_AI_CHAT, "", "stop_tts")
+        mode = str(payload.get("mode", "conversation")).strip() or "conversation"
+        if mode == "conversation":
+            result = send_rpc(API_STOP_AI_CHAT, "", "stop_tts")
+        elif mode == "asr_only":
+            result = send_rpc(API_STOP_ASR, "", "stop_asr")
+        else:
+            print_json({
+                "ok": False,
+                "code": 400,
+                "action": "stop",
+                "error": f"Unknown mode: {mode}",
+            })
+            return 1
+        result["mode"] = mode
     else:
         print_json({
             "ok": False,

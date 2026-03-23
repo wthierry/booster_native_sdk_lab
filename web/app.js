@@ -5,6 +5,8 @@ const batteryPill = document.getElementById("battery-pill");
 const debugWindow = document.getElementById("debug-window");
 const copyDebugButton = document.getElementById("copy-debug");
 const ttsText = document.getElementById("tts-text");
+const modeSelect = document.getElementById("mode-select");
+const modeNote = document.getElementById("mode-note");
 const volumeSlider = document.getElementById("volume-slider");
 const volumeValue = document.getElementById("volume-value");
 const enableVideo = document.getElementById("enable-video");
@@ -14,6 +16,7 @@ const videoStatus = document.getElementById("video-status");
 const videoFrame = videoPreview.closest(".video-frame");
 const visionSummary = document.getElementById("vision-summary");
 const defaultVoiceType = "zh_female_shuangkuaisisi_emo_v2_mars_bigtts";
+const defaultInterruptSpeechDurationMs = 200;
 let volumeUpdateTimer = null;
 let videoRefreshTimer = null;
 let visionRefreshTimer = null;
@@ -22,6 +25,45 @@ let lastSpokenText = "";
 let lastOpenAiVisionText = "";
 let lastOpenAiErrorText = "";
 let copyButtonTimer = null;
+let currentMode = "";
+
+function modeLabel(mode) {
+  return mode?.label || mode?.id || "Unknown";
+}
+
+function setModeNote(text) {
+  modeNote.textContent = text;
+}
+
+function renderModeOptions(data) {
+  const modes = Array.isArray(data?.modes) ? data.modes : [];
+  const selectedMode = typeof data?.current_mode?.id === "string" ? data.current_mode.id : currentMode;
+  currentMode = selectedMode;
+
+  modeSelect.innerHTML = "";
+  for (const mode of modes) {
+    const option = document.createElement("option");
+    option.value = mode.id;
+    option.textContent = modeLabel(mode);
+    option.selected = mode.id === selectedMode;
+    modeSelect.appendChild(option);
+  }
+
+  modeSelect.disabled = modes.length === 0;
+  if (!modes.length) {
+    setModeNote("No robot modes available.");
+    return;
+  }
+
+  const activeMode =
+    modes.find((mode) => mode.id === selectedMode) ||
+    (data?.current_mode && typeof data.current_mode === "object" ? data.current_mode : null);
+  if (activeMode?.description) {
+    setModeNote(`Current mode: ${modeLabel(activeMode)}. ${activeMode.description}`);
+  } else {
+    setModeNote(selectedMode ? `Current mode: ${selectedMode}` : "Current mode unavailable.");
+  }
+}
 
 function appendDebug(title, payload) {
   const block = [
@@ -46,6 +88,32 @@ function setCopyButtonState(label, copied = false) {
       copyDebugButton.classList.remove("is-copied");
       copyButtonTimer = null;
     }, 1600);
+  }
+}
+
+async function copyText(text) {
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const temp = document.createElement("textarea");
+  temp.value = text;
+  temp.setAttribute("readonly", "");
+  temp.style.position = "fixed";
+  temp.style.top = "-9999px";
+  temp.style.left = "-9999px";
+  document.body.appendChild(temp);
+  temp.focus();
+  temp.select();
+
+  try {
+    const copied = document.execCommand("copy");
+    if (!copied) {
+      throw new Error("document.execCommand('copy') returned false");
+    }
+  } finally {
+    document.body.removeChild(temp);
   }
 }
 
@@ -126,6 +194,18 @@ async function refreshSpeechDebug() {
   if (!openAiVision && !openAiError && !visionSummary.textContent.trim()) {
     setVisionSummary("No image description yet.");
   }
+}
+
+async function refreshRobotMode() {
+  const response = await fetch("/robot/mode");
+  const data = await response.json();
+  if (!data.ok) {
+    appendDebug("/robot/mode response", data);
+    modeSelect.disabled = true;
+    setModeNote("Robot mode is unavailable.");
+    return;
+  }
+  renderModeOptions(data);
 }
 
 async function refreshVisualContext() {
@@ -230,6 +310,7 @@ document.getElementById("refresh-battery").addEventListener("click", () => {
 document.getElementById("start-tts").addEventListener("click", async () => {
   const payload = {
     voice_type: defaultVoiceType,
+    interrupt_speech_duration: defaultInterruptSpeechDurationMs,
     video_enabled: enableVideo.checked,
   };
   appendDebug("/rtc/tts/start request", payload);
@@ -267,6 +348,51 @@ document.getElementById("stop-tts").addEventListener("click", async () => {
   }
 });
 
+document.getElementById("wave-hand").addEventListener("click", async () => {
+  const payload = {};
+  appendDebug("/robot/wave-hand request", payload);
+  try {
+    await postJson("/robot/wave-hand", payload);
+  } catch (error) {
+    appendDebug("Wave hand error", String(error));
+  }
+});
+
+modeSelect.addEventListener("change", async () => {
+  const previousMode = currentMode;
+  const payload = { mode: modeSelect.value };
+  const selectedOption = modeSelect.options[modeSelect.selectedIndex];
+  const selectedLabel = selectedOption?.textContent || payload.mode;
+
+  if (payload.mode !== previousMode) {
+    const confirmed = window.confirm(`Switch robot mode to ${selectedLabel}?`);
+    if (!confirmed) {
+      modeSelect.value = previousMode;
+      return;
+    }
+  }
+
+  appendDebug("/robot/mode request", payload);
+
+  try {
+    modeSelect.disabled = true;
+    setModeNote("Updating mode...");
+    const data = await postJson("/robot/mode", payload);
+    if (data.ok) {
+      renderModeOptions(data);
+    } else {
+      setModeNote("Unable to update mode.");
+      await refreshRobotMode();
+    }
+  } catch (error) {
+    appendDebug("Mode change error", String(error));
+    setModeNote("Unable to update mode.");
+    await refreshRobotMode();
+  } finally {
+    modeSelect.disabled = false;
+  }
+});
+
 enableVideo.addEventListener("change", () => {
   if (enableVideo.checked) {
     startVideoPreview();
@@ -283,7 +409,7 @@ copyDebugButton.addEventListener("click", async () => {
   }
 
   try {
-    await navigator.clipboard.writeText(text);
+    await copyText(text);
     setCopyButtonState("Copied", true);
   } catch (error) {
     setCopyButtonState("Copy failed");
@@ -309,6 +435,10 @@ setInterval(() => {
   refreshBattery().catch((error) => {
     console.error("Refresh error", error);
   });
+
+  refreshRobotMode().catch((error) => {
+    console.error("Robot mode error", error);
+  });
 }, 5000);
 
 setInterval(() => {
@@ -319,6 +449,10 @@ setInterval(() => {
 
 refreshBattery().catch((error) => {
   console.error("Initial refresh error", error);
+});
+
+refreshRobotMode().catch((error) => {
+  appendDebug("Initial robot mode error", String(error));
 });
 
 refreshVolume().catch((error) => {
