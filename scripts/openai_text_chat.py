@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 
-import base64
 import json
 import os
+import ssl
 import sys
 import urllib.error
 import urllib.request
@@ -41,6 +41,24 @@ def load_dotenv_if_present():
             os.environ.setdefault(key, value)
 
 
+def build_ssl_context():
+    cafile = os.environ.get("SSL_CERT_FILE", "").strip()
+    if cafile and os.path.exists(cafile):
+        return ssl.create_default_context(cafile=cafile)
+
+    try:
+        import certifi
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        pass
+
+    if os.path.exists("/etc/ssl/cert.pem"):
+        return ssl.create_default_context(cafile="/etc/ssl/cert.pem")
+
+    return ssl.create_default_context()
+
+
 def resolve_api_key():
     for name in OPENAI_KEY_NAMES:
         value = os.environ.get(name, "").strip()
@@ -64,7 +82,7 @@ def extract_output_text(payload):
     return "\n".join(pieces).strip()
 
 
-def analyze_image(prompt, image_path):
+def respond_text(prompt, config):
     api_key, key_name = resolve_api_key()
     if not api_key:
         return {
@@ -73,36 +91,23 @@ def analyze_image(prompt, image_path):
             "error": "Missing OpenAI API key",
         }
 
-    if not os.path.exists(image_path):
-        return {
-            "ok": False,
-            "code": 404,
-            "error": f"Image not found: {image_path}",
-        }
-
-    model = os.environ.get("BOOSTER_OPENAI_VISION_MODEL", "").strip() or DEFAULT_MODEL
-    with open(image_path, "rb") as image_file:
-        encoded = base64.b64encode(image_file.read()).decode("ascii")
+    model = str(config.get("model", "")).strip() or DEFAULT_MODEL
+    system_prompt = str(config.get("system_prompt", "")).strip()
 
     request_body = {
         "model": model,
-        "input": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "input_text",
-                        "text": prompt,
-                    },
-                    {
-                        "type": "input_image",
-                        "image_url": f"data:image/jpeg;base64,{encoded}",
-                    },
-                ],
-            }
-        ],
-        "max_output_tokens": 160,
+        "input": [],
+        "max_output_tokens": 220,
     }
+    if system_prompt:
+        request_body["input"].append({
+            "role": "system",
+            "content": [{"type": "input_text", "text": system_prompt}],
+        })
+    request_body["input"].append({
+        "role": "user",
+        "content": [{"type": "input_text", "text": prompt}],
+    })
 
     request = urllib.request.Request(
         DEFAULT_BASE_URL,
@@ -115,79 +120,65 @@ def analyze_image(prompt, image_path):
     )
 
     try:
-        with urllib.request.urlopen(request, timeout=20) as response:
+        with urllib.request.urlopen(request, timeout=25, context=build_ssl_context()) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         return {
             "ok": False,
             "code": exc.code,
-            "error": "OpenAI request failed",
+            "error": "OpenAI text request failed",
             "response_body": exc.read().decode("utf-8", errors="replace"),
         }
     except Exception as exc:
         return {
             "ok": False,
             "code": 500,
-            "error": f"OpenAI request error: {exc}",
+            "error": f"OpenAI text request error: {exc}",
         }
 
-    answer = extract_output_text(payload)
     return {
         "ok": True,
         "code": 0,
         "model": model,
         "api_key_name": key_name,
-        "answer": answer,
+        "answer": extract_output_text(payload),
         "response_body": payload,
     }
 
 
 def main():
     load_dotenv_if_present()
+
     if len(sys.argv) != 3:
         print_json({
             "ok": False,
             "code": 400,
-            "action": "usage",
-            "error": "Usage: openai_vision.py <analyze> <json-payload>",
+            "error": "Usage: openai_text_chat.py <config-json> <payload-json>",
         })
         return 1
 
-    action = sys.argv[1]
     try:
+        config = json.loads(sys.argv[1])
         payload = json.loads(sys.argv[2])
     except Exception as exc:
         print_json({
             "ok": False,
             "code": 400,
-            "action": action,
-            "error": f"Invalid JSON payload: {exc}",
+            "error": f"Invalid JSON: {exc}",
         })
         return 1
 
-    if action != "analyze":
+    prompt = str(payload.get("text", "")).strip()
+    if not prompt:
         print_json({
             "ok": False,
             "code": 400,
-            "action": action,
-            "error": "Unknown action",
+            "error": "Missing text",
         })
         return 1
 
-    prompt = str(payload.get("prompt", "")).strip()
-    image_path = str(payload.get("image_path", "")).strip()
-    if not prompt or not image_path:
-        print_json({
-            "ok": False,
-            "code": 400,
-            "action": action,
-            "error": "Missing prompt or image_path",
-        })
-        return 1
-
-    result = analyze_image(prompt, image_path)
-    result["action"] = action
-    result["image_path"] = image_path
+    result = respond_text(prompt, config)
+    result["text"] = prompt
     print_json(result)
     return 0 if result.get("ok") else 1
 

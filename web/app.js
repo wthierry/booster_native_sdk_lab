@@ -15,6 +15,15 @@ const videoPlaceholder = document.getElementById("video-placeholder");
 const videoStatus = document.getElementById("video-status");
 const videoFrame = videoPreview.closest(".video-frame");
 const visionSummary = document.getElementById("vision-summary");
+const openAiVoicePanel = document.getElementById("openai-voice-panel");
+const openAiVoiceStatus = document.getElementById("openai-voice-status");
+const startOpenAiVoiceButton = document.getElementById("start-openai-voice");
+const stopOpenAiVoiceButton = document.getElementById("stop-openai-voice");
+const openAiTextPanel = document.getElementById("openai-text-panel");
+const openAiTextInput = document.getElementById("openai-text-input");
+const openAiTextStatus = document.getElementById("openai-text-status");
+const openAiTextResponse = document.getElementById("openai-text-response");
+const sendOpenAiTextButton = document.getElementById("send-openai-text");
 const defaultVoiceType = "zh_female_shuangkuaisisi_emo_v2_mars_bigtts";
 const defaultInterruptSpeechDurationMs = 200;
 let volumeUpdateTimer = null;
@@ -26,6 +35,13 @@ let lastOpenAiVisionText = "";
 let lastOpenAiErrorText = "";
 let copyButtonTimer = null;
 let currentMode = "";
+let isDevMode = false;
+let openAiRealtimeConfig = null;
+let openAiTextConfig = null;
+let openAiPeerConnection = null;
+let openAiEventChannel = null;
+let openAiMicStream = null;
+let openAiRemoteAudio = null;
 
 function modeLabel(mode) {
   return mode?.label || mode?.id || "Unknown";
@@ -123,6 +139,50 @@ function setVisionSummary(text, isError = false) {
   visionSummary.classList.toggle("is-error", Boolean(text) && isError);
 }
 
+function setOpenAiVoiceStatus(text) {
+  openAiVoiceStatus.textContent = text;
+}
+
+function setOpenAiVoiceButtons(isConnected) {
+  startOpenAiVoiceButton.disabled = isConnected;
+  stopOpenAiVoiceButton.disabled = !isConnected;
+}
+
+function getOpenAiVoiceSupport() {
+  if (typeof window.RTCPeerConnection !== "function") {
+    return {
+      ok: false,
+      reason: "This browser does not support WebRTC peer connections.",
+    };
+  }
+
+  if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
+    const host = window.location.hostname;
+    const isLocalHost = host === "localhost" || host === "127.0.0.1" || host === "::1";
+    return {
+      ok: false,
+      reason: isLocalHost
+        ? "This browser does not expose microphone access on this page."
+        : "Microphone access is unavailable here. Open the UI from https or from http://localhost:8080 on the same machine.",
+    };
+  }
+
+  return {
+    ok: true,
+    reason: "",
+  };
+}
+
+function setOpenAiTextStatus(text) {
+  openAiTextStatus.textContent = text;
+}
+
+function setOpenAiTextResponse(text, isError = false) {
+  openAiTextResponse.textContent = text;
+  openAiTextResponse.classList.toggle("is-empty", !text);
+  openAiTextResponse.classList.toggle("is-error", Boolean(text) && isError);
+}
+
 function renderBattery(battery) {
   if (!battery.available) {
     batteryLevel.style.width = "0%";
@@ -163,6 +223,7 @@ async function refreshBattery() {
 async function refreshSpeechDebug() {
   const response = await fetch("/health");
   const data = await response.json();
+  isDevMode = Boolean(data?.wrapper?.dev_mode);
   const speech = data?.wrapper?.speech_debug || {};
   const heard = typeof speech.last_heard === "string" ? speech.last_heard.trim() : "";
   const spoken = typeof speech.last_spoken === "string" ? speech.last_spoken.trim() : "";
@@ -193,6 +254,46 @@ async function refreshSpeechDebug() {
 
   if (!openAiVision && !openAiError && !visionSummary.textContent.trim()) {
     setVisionSummary("No image description yet.");
+  }
+
+  const realtime = data?.wrapper?.openai_realtime || {};
+  const openAiText = data?.wrapper?.openai_text || {};
+  if (isDevMode) {
+    openAiVoicePanel.hidden = false;
+    openAiTextPanel.hidden = false;
+    if (realtime.available) {
+      openAiRealtimeConfig = realtime;
+      const support = getOpenAiVoiceSupport();
+      if (!support.ok) {
+        setOpenAiVoiceButtons(false);
+        startOpenAiVoiceButton.disabled = true;
+        setOpenAiVoiceStatus(
+          `OpenAI voice unavailable in this browser context. ${support.reason}`
+        );
+      } else {
+        setOpenAiVoiceStatus(
+          openAiPeerConnection
+            ? `Connected to ${realtime.model} with voice ${realtime.voice}.`
+            : `Ready to connect to ${realtime.model} with voice ${realtime.voice}.`
+        );
+        startOpenAiVoiceButton.disabled = Boolean(openAiPeerConnection);
+      }
+    } else {
+      openAiRealtimeConfig = null;
+      setOpenAiVoiceStatus("Set CHATGPT_API_KEY or OPENAI_API_KEY in .env to enable Mac OpenAI voice.");
+      setOpenAiVoiceButtons(false);
+    }
+
+    if (openAiText.available) {
+      openAiTextConfig = openAiText;
+      setOpenAiTextStatus(`Ready to send text to ${openAiText.model}.`);
+    } else {
+      openAiTextConfig = null;
+      setOpenAiTextStatus("Set CHATGPT_API_KEY or OPENAI_API_KEY in .env to enable Mac OpenAI text.");
+    }
+  } else {
+    openAiVoicePanel.hidden = true;
+    openAiTextPanel.hidden = true;
   }
 }
 
@@ -235,6 +336,183 @@ async function postJson(path, payload) {
   const data = await response.json();
   appendDebug(`${path} response`, data);
   return data;
+}
+
+async function fetchOpenAiRealtimeConfig() {
+  const response = await fetch("/openai/realtime/config");
+  const data = await response.json();
+  if (!response.ok || !data.available) {
+    throw new Error(data.error || "OpenAI Realtime is unavailable.");
+  }
+  openAiRealtimeConfig = data;
+  return data;
+}
+
+async function fetchOpenAiTextConfig() {
+  const response = await fetch("/openai/text/config");
+  const data = await response.json();
+  if (!response.ok || !data.available) {
+    throw new Error(data.error || "OpenAI text is unavailable.");
+  }
+  openAiTextConfig = data;
+  return data;
+}
+
+function closeOpenAiVoiceConnection() {
+  if (openAiEventChannel) {
+    try {
+      openAiEventChannel.close();
+    } catch (error) {
+      appendDebug("OpenAI voice channel close error", String(error));
+    }
+    openAiEventChannel = null;
+  }
+
+  if (openAiPeerConnection) {
+    try {
+      openAiPeerConnection.close();
+    } catch (error) {
+      appendDebug("OpenAI voice peer close error", String(error));
+    }
+    openAiPeerConnection = null;
+  }
+
+  if (openAiMicStream) {
+    for (const track of openAiMicStream.getTracks()) {
+      track.stop();
+    }
+    openAiMicStream = null;
+  }
+
+  if (openAiRemoteAudio) {
+    openAiRemoteAudio.srcObject = null;
+  }
+
+  setOpenAiVoiceButtons(false);
+  if (isDevMode && openAiRealtimeConfig?.available) {
+    setOpenAiVoiceStatus(
+      `Ready to connect to ${openAiRealtimeConfig.model} with voice ${openAiRealtimeConfig.voice}.`
+    );
+  }
+}
+
+async function startOpenAiVoiceConnection() {
+  if (openAiPeerConnection) {
+    return;
+  }
+
+  const config = openAiRealtimeConfig || (await fetchOpenAiRealtimeConfig());
+  const support = getOpenAiVoiceSupport();
+  if (!support.ok) {
+    throw new Error(support.reason);
+  }
+  const pc = new RTCPeerConnection();
+  openAiPeerConnection = pc;
+  openAiRemoteAudio = document.createElement("audio");
+  openAiRemoteAudio.autoplay = true;
+  openAiRemoteAudio.playsInline = true;
+
+  pc.addEventListener("connectionstatechange", () => {
+    const state = pc.connectionState;
+    appendDebug("OpenAI voice connection state", state);
+    if (state === "connected") {
+      setOpenAiVoiceStatus(`Connected to ${config.model} with voice ${config.voice}.`);
+      setOpenAiVoiceButtons(true);
+    } else if (state === "failed" || state === "closed" || state === "disconnected") {
+      closeOpenAiVoiceConnection();
+    }
+  });
+
+  pc.ontrack = (event) => {
+    openAiRemoteAudio.srcObject = event.streams[0];
+  };
+
+  openAiMicStream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      channelCount: 1,
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    },
+  });
+  for (const track of openAiMicStream.getTracks()) {
+    pc.addTrack(track, openAiMicStream);
+  }
+
+  const dc = pc.createDataChannel("oai-events");
+  openAiEventChannel = dc;
+  dc.addEventListener("open", () => {
+    appendDebug("OpenAI voice data channel", "open");
+    setOpenAiVoiceStatus(`Connected to ${config.model} with voice ${config.voice}.`);
+    setOpenAiVoiceButtons(true);
+  });
+  dc.addEventListener("message", (event) => {
+    try {
+      const payload = JSON.parse(event.data);
+      if (
+        payload.type === "response.audio_transcript.done" ||
+        payload.type === "conversation.item.input_audio_transcription.completed"
+      ) {
+        appendDebug(`OpenAI ${payload.type}`, payload.transcript || payload.text || payload);
+      }
+    } catch (error) {
+      appendDebug("OpenAI voice event parse error", String(error));
+    }
+  });
+
+  setOpenAiVoiceStatus("Opening OpenAI WebRTC session...");
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+
+  const response = await fetch("/openai/realtime/call", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/sdp",
+    },
+    body: offer.sdp,
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    closeOpenAiVoiceConnection();
+    throw new Error(errorText || "OpenAI Realtime call failed.");
+  }
+
+  const answerSdp = await response.text();
+  await pc.setRemoteDescription({
+    type: "answer",
+    sdp: answerSdp,
+  });
+
+  appendDebug("OpenAI voice session", {
+    model: config.model,
+    voice: config.voice,
+    transport: "webrtc",
+  });
+}
+
+async function sendOpenAiTextPrompt() {
+  const prompt = openAiTextInput.value.trim();
+  if (!prompt) {
+    setOpenAiTextResponse("Enter some text first.", true);
+    return;
+  }
+
+  const config = openAiTextConfig || (await fetchOpenAiTextConfig());
+  setOpenAiTextStatus(`Waiting for ${config.model}...`);
+  setOpenAiTextResponse("Thinking...");
+  sendOpenAiTextButton.disabled = true;
+
+  try {
+    const data = await postJson("/openai/text/respond", { text: prompt });
+    if (!data.ok) {
+      throw new Error(data.error || "OpenAI text request failed.");
+    }
+    setOpenAiTextStatus(`Response from ${data.model || config.model}.`);
+    setOpenAiTextResponse(data.answer || "No text returned.");
+  } finally {
+    sendOpenAiTextButton.disabled = false;
+  }
 }
 
 async function refreshVolume() {
@@ -346,6 +624,30 @@ document.getElementById("stop-tts").addEventListener("click", async () => {
   } catch (error) {
     appendDebug("Stop TTS error", String(error));
   }
+});
+
+startOpenAiVoiceButton.addEventListener("click", async () => {
+  try {
+    await startOpenAiVoiceConnection();
+  } catch (error) {
+    appendDebug("OpenAI voice start error", String(error));
+    closeOpenAiVoiceConnection();
+    setOpenAiVoiceStatus(`OpenAI voice failed: ${String(error)}`);
+  }
+});
+
+stopOpenAiVoiceButton.addEventListener("click", () => {
+  appendDebug("OpenAI voice", "stopped");
+  closeOpenAiVoiceConnection();
+});
+
+sendOpenAiTextButton.addEventListener("click", () => {
+  sendOpenAiTextPrompt().catch((error) => {
+    appendDebug("OpenAI text error", String(error));
+    setOpenAiTextStatus(`OpenAI text failed: ${String(error)}`);
+    setOpenAiTextResponse(`OpenAI text failed: ${String(error)}`, true);
+    sendOpenAiTextButton.disabled = false;
+  });
 });
 
 document.getElementById("wave-hand").addEventListener("click", async () => {
@@ -467,3 +769,15 @@ setVideoPreviewState(false);
 videoStatus.textContent = "Off";
 setVisionSummary("No image description yet.");
 setCopyButtonState("Copy Log");
+setOpenAiVoiceButtons(false);
+setOpenAiVoiceStatus("Checking OpenAI voice availability...");
+setOpenAiTextStatus("Checking OpenAI text availability...");
+setOpenAiTextResponse("No text response yet.");
+
+window.addEventListener("beforeunload", () => {
+  closeOpenAiVoiceConnection();
+});
+
+window.addEventListener("pagehide", () => {
+  closeOpenAiVoiceConnection();
+});

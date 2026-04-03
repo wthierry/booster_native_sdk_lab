@@ -44,6 +44,36 @@
               <textarea id="tts-text" class="tts-input" rows="4">hello from the ROS RTC TTS wrapper</textarea>
             </div>
 
+            <section id="openai-voice-panel" class="openai-panel" hidden aria-labelledby="openai-voice-title">
+              <div class="openai-head">
+                <div>
+                  <h3 id="openai-voice-title" class="vision-title">Mac OpenAI Voice</h3>
+                  <p class="vision-copy">Fast WebRTC speech-to-speech path for local Mac use.</p>
+                </div>
+                <div class="button-row">
+                  <button id="start-openai-voice" class="ghost" type="button">Start OpenAI Voice</button>
+                  <button id="stop-openai-voice" class="ghost" type="button" disabled>Stop OpenAI Voice</button>
+                </div>
+              </div>
+              <div id="openai-voice-status" class="openai-status">Checking OpenAI voice availability...</div>
+            </section>
+
+            <section id="openai-text-panel" class="openai-panel" hidden aria-labelledby="openai-text-title">
+              <div class="openai-head">
+                <div>
+                  <h3 id="openai-text-title" class="vision-title">Mac OpenAI Text</h3>
+                  <p class="vision-copy">Direct text chat path for local Mac use.</p>
+                </div>
+                <div class="button-row">
+                  <button id="send-openai-text" class="ghost" type="button">Send Text</button>
+                </div>
+              </div>
+              <label class="tts-label" for="openai-text-input">Prompt</label>
+              <textarea id="openai-text-input" class="tts-input" rows="4" placeholder="Ask OpenAI something..."></textarea>
+              <div id="openai-text-status" class="openai-status">Checking OpenAI text availability...</div>
+              <div id="openai-text-response" class="vision-summary is-empty">No text response yet.</div>
+            </section>
+
             <div class="mode-row">
               <label class="tts-label" for="mode-select">Mode</label>
               <select id="mode-select" class="mode-select" aria-describedby="mode-note"></select>

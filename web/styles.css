@@ -277,6 +277,32 @@ h1 {
   color: var(--danger);
 }
 
+.openai-panel {
+  margin-bottom: 18px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(255, 251, 245, 0.94), rgba(247, 239, 228, 0.9));
+}
+
+.openai-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 10px;
+}
+
+.openai-status {
+  min-height: 48px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(201, 92, 43, 0.18);
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--ink);
+  line-height: 1.5;
+}
+
 .volume-head {
   display: flex;
   align-items: center;
