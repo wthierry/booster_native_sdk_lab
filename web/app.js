@@ -19,11 +19,6 @@ const openAiVoicePanel = document.getElementById("openai-voice-panel");
 const openAiVoiceStatus = document.getElementById("openai-voice-status");
 const startOpenAiVoiceButton = document.getElementById("start-openai-voice");
 const stopOpenAiVoiceButton = document.getElementById("stop-openai-voice");
-const openAiTextPanel = document.getElementById("openai-text-panel");
-const openAiTextInput = document.getElementById("openai-text-input");
-const openAiTextStatus = document.getElementById("openai-text-status");
-const openAiTextResponse = document.getElementById("openai-text-response");
-const sendOpenAiTextButton = document.getElementById("send-openai-text");
 const defaultVoiceType = "zh_female_shuangkuaisisi_emo_v2_mars_bigtts";
 const defaultInterruptSpeechDurationMs = 200;
 let volumeUpdateTimer = null;
@@ -37,7 +32,6 @@ let copyButtonTimer = null;
 let currentMode = "";
 let isDevMode = false;
 let openAiRealtimeConfig = null;
-let openAiTextConfig = null;
 let openAiPeerConnection = null;
 let openAiEventChannel = null;
 let openAiMicStream = null;
@@ -148,6 +142,10 @@ function setOpenAiVoiceButtons(isConnected) {
   stopOpenAiVoiceButton.disabled = !isConnected;
 }
 
+function isRobotRuntime() {
+  return !isDevMode;
+}
+
 function getOpenAiVoiceSupport() {
   if (typeof window.RTCPeerConnection !== "function") {
     return {
@@ -171,16 +169,6 @@ function getOpenAiVoiceSupport() {
     ok: true,
     reason: "",
   };
-}
-
-function setOpenAiTextStatus(text) {
-  openAiTextStatus.textContent = text;
-}
-
-function setOpenAiTextResponse(text, isError = false) {
-  openAiTextResponse.textContent = text;
-  openAiTextResponse.classList.toggle("is-empty", !text);
-  openAiTextResponse.classList.toggle("is-error", Boolean(text) && isError);
 }
 
 function renderBattery(battery) {
@@ -257,10 +245,8 @@ async function refreshSpeechDebug() {
   }
 
   const realtime = data?.wrapper?.openai_realtime || {};
-  const openAiText = data?.wrapper?.openai_text || {};
-  if (isDevMode) {
+  if (isRobotRuntime()) {
     openAiVoicePanel.hidden = false;
-    openAiTextPanel.hidden = false;
     if (realtime.available) {
       openAiRealtimeConfig = realtime;
       const support = getOpenAiVoiceSupport();
@@ -268,7 +254,7 @@ async function refreshSpeechDebug() {
         setOpenAiVoiceButtons(false);
         startOpenAiVoiceButton.disabled = true;
         setOpenAiVoiceStatus(
-          `OpenAI voice unavailable in this browser context. ${support.reason}`
+          `Robot OpenAI voice is unavailable in this browser context. ${support.reason}`
         );
       } else {
         setOpenAiVoiceStatus(
@@ -280,20 +266,15 @@ async function refreshSpeechDebug() {
       }
     } else {
       openAiRealtimeConfig = null;
-      setOpenAiVoiceStatus("Set CHATGPT_API_KEY or OPENAI_API_KEY in .env to enable Mac OpenAI voice.");
+      setOpenAiVoiceStatus("Set CHATGPT_API_KEY or OPENAI_API_KEY in .env to enable Robot OpenAI voice.");
       setOpenAiVoiceButtons(false);
-    }
-
-    if (openAiText.available) {
-      openAiTextConfig = openAiText;
-      setOpenAiTextStatus(`Ready to send text to ${openAiText.model}.`);
-    } else {
-      openAiTextConfig = null;
-      setOpenAiTextStatus("Set CHATGPT_API_KEY or OPENAI_API_KEY in .env to enable Mac OpenAI text.");
     }
   } else {
     openAiVoicePanel.hidden = true;
-    openAiTextPanel.hidden = true;
+    openAiRealtimeConfig = null;
+    closeOpenAiVoiceConnection();
+    setOpenAiVoiceStatus("Robot OpenAI voice is only available when the wrapper is running on the robot.");
+    startOpenAiVoiceButton.disabled = true;
   }
 }
 
@@ -348,16 +329,6 @@ async function fetchOpenAiRealtimeConfig() {
   return data;
 }
 
-async function fetchOpenAiTextConfig() {
-  const response = await fetch("/openai/text/config");
-  const data = await response.json();
-  if (!response.ok || !data.available) {
-    throw new Error(data.error || "OpenAI text is unavailable.");
-  }
-  openAiTextConfig = data;
-  return data;
-}
-
 function closeOpenAiVoiceConnection() {
   if (openAiEventChannel) {
     try {
@@ -389,7 +360,7 @@ function closeOpenAiVoiceConnection() {
   }
 
   setOpenAiVoiceButtons(false);
-  if (isDevMode && openAiRealtimeConfig?.available) {
+  if (isRobotRuntime() && openAiRealtimeConfig?.available) {
     setOpenAiVoiceStatus(
       `Ready to connect to ${openAiRealtimeConfig.model} with voice ${openAiRealtimeConfig.voice}.`
     );
@@ -489,30 +460,6 @@ async function startOpenAiVoiceConnection() {
     voice: config.voice,
     transport: "webrtc",
   });
-}
-
-async function sendOpenAiTextPrompt() {
-  const prompt = openAiTextInput.value.trim();
-  if (!prompt) {
-    setOpenAiTextResponse("Enter some text first.", true);
-    return;
-  }
-
-  const config = openAiTextConfig || (await fetchOpenAiTextConfig());
-  setOpenAiTextStatus(`Waiting for ${config.model}...`);
-  setOpenAiTextResponse("Thinking...");
-  sendOpenAiTextButton.disabled = true;
-
-  try {
-    const data = await postJson("/openai/text/respond", { text: prompt });
-    if (!data.ok) {
-      throw new Error(data.error || "OpenAI text request failed.");
-    }
-    setOpenAiTextStatus(`Response from ${data.model || config.model}.`);
-    setOpenAiTextResponse(data.answer || "No text returned.");
-  } finally {
-    sendOpenAiTextButton.disabled = false;
-  }
 }
 
 async function refreshVolume() {
@@ -641,15 +588,6 @@ stopOpenAiVoiceButton.addEventListener("click", () => {
   closeOpenAiVoiceConnection();
 });
 
-sendOpenAiTextButton.addEventListener("click", () => {
-  sendOpenAiTextPrompt().catch((error) => {
-    appendDebug("OpenAI text error", String(error));
-    setOpenAiTextStatus(`OpenAI text failed: ${String(error)}`);
-    setOpenAiTextResponse(`OpenAI text failed: ${String(error)}`, true);
-    sendOpenAiTextButton.disabled = false;
-  });
-});
-
 document.getElementById("wave-hand").addEventListener("click", async () => {
   const payload = {};
   appendDebug("/robot/wave-hand request", payload);
@@ -771,8 +709,6 @@ setVisionSummary("No image description yet.");
 setCopyButtonState("Copy Log");
 setOpenAiVoiceButtons(false);
 setOpenAiVoiceStatus("Checking OpenAI voice availability...");
-setOpenAiTextStatus("Checking OpenAI text availability...");
-setOpenAiTextResponse("No text response yet.");
 
 window.addEventListener("beforeunload", () => {
   closeOpenAiVoiceConnection();
