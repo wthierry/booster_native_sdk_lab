@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -29,12 +30,22 @@ API_START_ASR = 1000
 API_STOP_ASR = 1001
 SERVICE_TYPE = "booster_interface/srv/RpcService"
 SERVICE_NAME = "booster_rtc_service"
-DEFAULT_INTERRUPT_SPEECH_DURATION_MS = 200
+DEFAULT_INTERRUPT_SPEECH_DURATION_MS = 700
 DEFAULT_INTERRUPT_KEYWORDS = ["stop", "shut up"]
 
 
 def print_json(payload):
     print(json.dumps(payload, ensure_ascii=True))
+
+
+def resolve_voice_type(payload):
+    requested = str(payload.get("voice_type", "") or "").strip()
+    if requested:
+        return requested
+    configured = os.getenv("BOOSTER_RTC_VOICE_TYPE", "").strip()
+    if configured:
+        return configured
+    return "zh_female_shuangkuaisisi_emo_v2_mars_bigtts"
 
 
 def parse_response(output):
@@ -142,7 +153,7 @@ def main():
         return 1
 
     if action == "start":
-        voice_type = payload.get("voice_type", "zh_female_shuangkuaisisi_emo_v2_mars_bigtts")
+        voice_type = resolve_voice_type(payload)
         mode = str(payload.get("mode", "conversation")).strip() or "conversation"
         interrupt_speech_duration = int(
             payload.get("interrupt_speech_duration", DEFAULT_INTERRUPT_SPEECH_DURATION_MS)
@@ -156,7 +167,7 @@ def main():
         if not interrupt_keywords:
             interrupt_keywords = list(DEFAULT_INTERRUPT_KEYWORDS)
         if mode == "conversation":
-            body = json.dumps({
+            request_payload = {
                 "interrupt_mode": True,
                 "asr_config": {
                     "interrupt_speech_duration": interrupt_speech_duration,
@@ -168,11 +179,13 @@ def main():
                     "prompt_name": "",
                 },
                 "tts_config": {
-                    "voice_type": voice_type,
                     "ignore_bracket_text": [3],
                 },
                 "enable_face_tracking": False,
-            })
+            }
+            if voice_type:
+                request_payload["tts_config"]["voice_type"] = voice_type
+            body = json.dumps(request_payload)
             result = send_rpc(API_START_AI_CHAT, body, "start_tts")
         elif mode == "asr_only":
             result = send_rpc(API_START_ASR, "", "start_asr")

@@ -52,7 +52,7 @@ constexpr char kRosTtsHelper[] = "scripts/ros_rtc_tts.py";
 constexpr char kOpenAiVisionHelper[] = "scripts/openai_vision.py";
 constexpr char kOpenAiRealtimeCallHelper[] = "scripts/openai_realtime_call.py";
 constexpr char kOpenAiTextHelper[] = "scripts/openai_text_chat.py";
-constexpr int kDefaultInterruptSpeechDurationMs = 200;
+constexpr int kDefaultInterruptSpeechDurationMs = 700;
 
 #if BOOSTER_DEV_MODE
 constexpr char kDefaultCameraPreviewPath[] = "tmp/booster_camera_preview.jpg";
@@ -106,6 +106,17 @@ std::string Trim(std::string value) {
         ++start;
     }
     return value.substr(start);
+}
+
+std::string ResolveRtcVoiceType() {
+    const char *configured = std::getenv("BOOSTER_RTC_VOICE_TYPE");
+    if (configured != nullptr) {
+        const std::string trimmed = Trim(configured);
+        if (!trimmed.empty()) {
+            return trimmed;
+        }
+    }
+    return kDefaultVoiceType;
 }
 
 std::string ReadFile(const std::string &path) {
@@ -632,16 +643,17 @@ public:
         return {
             {"ok", true},
             {"action", "start"},
-            {"voice_type", voice_type},
             {"interrupt_speech_duration", interrupt_speech_duration_ms},
             {"dev_mode", true},
             {"note", "TTS start is mocked in dev mode."},
         };
 #else
-        const json payload = {
-            {"voice_type", voice_type},
+        json payload = {
             {"interrupt_speech_duration", interrupt_speech_duration_ms},
         };
+        if (!voice_type.empty()) {
+            payload["voice_type"] = voice_type;
+        }
 
         json result = RunRosTtsHelper("start", payload);
         const std::string response_body = Trim(result.value("response_body", std::string()));
@@ -1125,7 +1137,7 @@ http::response<http::string_body> HandleRequest(
     if (req.method() == http::verb::post && path == "/rtc/tts/start") {
         try {
             const json body = ParseOptionalJsonBody(req.body());
-            const auto voice_type = body.value("voice_type", std::string(kDefaultVoiceType));
+            const auto voice_type = Trim(body.value("voice_type", ResolveRtcVoiceType()));
             const int interrupt_speech_duration_ms =
                 std::max(0, body.value("interrupt_speech_duration", kDefaultInterruptSpeechDurationMs));
             return JsonResponse(http::status::ok, wrapper.StartTts(voice_type, interrupt_speech_duration_ms));

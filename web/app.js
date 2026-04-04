@@ -15,8 +15,8 @@ const videoPlaceholder = document.getElementById("video-placeholder");
 const videoStatus = document.getElementById("video-status");
 const videoFrame = videoPreview.closest(".video-frame");
 const visionSummary = document.getElementById("vision-summary");
-const defaultVoiceType = "zh_female_shuangkuaisisi_emo_v2_mars_bigtts";
-const defaultInterruptSpeechDurationMs = 200;
+const defaultVoiceType = "";
+const defaultInterruptSpeechDurationMs = 700;
 let volumeUpdateTimer = null;
 let videoRefreshTimer = null;
 let visionRefreshTimer = null;
@@ -311,11 +311,13 @@ document.getElementById("refresh-battery").addEventListener("click", () => {
 
 document.getElementById("start-tts").addEventListener("click", async () => {
   const payload = {
-    voice_type: defaultVoiceType,
     interrupt_speech_duration: defaultInterruptSpeechDurationMs,
     mode: "conversation",
     video_enabled: enableVideo.checked,
   };
+  if (defaultVoiceType) {
+    payload.voice_type = defaultVoiceType;
+  }
   appendDebug("/rtc/tts/start request", payload);
   try {
     await postJson("/rtc/tts/start", payload);
