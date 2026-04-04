@@ -7,7 +7,7 @@ import subprocess
 import sys
 
 
-WELCOME_MSG = ""
+WELCOME_MSG = "Hello, I am booster robot"
 SYSTEM_PROMPT = """
 ## prompt
 You're a robot named Booster that offers emotional chatting to users with a dry, sarcastic sense of humor.
@@ -27,8 +27,11 @@ My style is clever, mildly sarcastic, and entertaining.
 
 API_START_AI_CHAT = 2000
 API_STOP_AI_CHAT = 2001
+API_START_ASR = 1000
+API_STOP_ASR = 1001
 SERVICE_TYPE = "booster_interface/srv/RpcService"
-SERVICE_NAME = "booster_rtc_service"
+RTC_SERVICE_NAME = "booster_rtc_service"
+LUI_SERVICE_NAME = "booster_lui_service"
 DEFAULT_INTERRUPT_SPEECH_DURATION_MS = 700
 DEFAULT_INTERRUPT_KEYWORDS = ["stop", "shut up"]
 
@@ -44,7 +47,7 @@ def resolve_voice_type(payload):
     configured = os.getenv("BOOSTER_RTC_VOICE_TYPE", "").strip()
     if configured:
         return configured
-    return "zh_female_shuangkuaisisi_emo_v2_mars_bigtts"
+    return "en_female_product_darcie_moon_bigtts"
 
 
 def parse_response(output):
@@ -70,7 +73,7 @@ def parse_response(output):
     return payload
 
 
-def send_rpc(api_id, body, action):
+def send_rpc(api_id, body, action, service_name):
     request_payload = json.dumps(
         {
             "msg": {
@@ -84,7 +87,7 @@ def send_rpc(api_id, body, action):
         "ros2",
         "service",
         "call",
-        f"/{SERVICE_NAME}",
+        f"/{service_name}",
         SERVICE_TYPE,
         request_payload,
     ]
@@ -125,7 +128,7 @@ def send_rpc(api_id, body, action):
 
     parsed["action"] = action
     parsed["cli_exit_status"] = proc.returncode
-    parsed["service_name"] = f"/{SERVICE_NAME}"
+    parsed["service_name"] = f"/{service_name}"
     return parsed
 
 
@@ -135,7 +138,7 @@ def main():
             "ok": False,
             "code": 400,
             "action": "usage",
-            "error": "Usage: ros_rtc_tts.py <start|stop> <json-payload>",
+            "error": "Usage: ros_rtc_tts.py <start|stop|lui_start_asr|lui_stop_asr> <json-payload>",
         })
         return 1
 
@@ -183,12 +186,16 @@ def main():
         if voice_type:
             request_payload["tts_config"]["voice_type"] = voice_type
         body = json.dumps(request_payload)
-        result = send_rpc(API_START_AI_CHAT, body, "start_tts")
+        result = send_rpc(API_START_AI_CHAT, body, "start_tts", RTC_SERVICE_NAME)
         result["voice_type"] = voice_type
         result["interrupt_speech_duration"] = interrupt_speech_duration
         result["interrupt_keywords"] = interrupt_keywords
     elif action == "stop":
-        result = send_rpc(API_STOP_AI_CHAT, "", "stop_tts")
+        result = send_rpc(API_STOP_AI_CHAT, "", "stop_tts", RTC_SERVICE_NAME)
+    elif action == "lui_start_asr":
+        result = send_rpc(API_START_ASR, "", "lui_start_asr", LUI_SERVICE_NAME)
+    elif action == "lui_stop_asr":
+        result = send_rpc(API_STOP_ASR, "", "lui_stop_asr", LUI_SERVICE_NAME)
     else:
         print_json({
             "ok": False,

@@ -46,10 +46,15 @@ constexpr char kDefaultBindAddress[] = "0.0.0.0";
 constexpr unsigned short kDefaultPort = 8080;
 constexpr int kDefaultDomainId = 0;
 constexpr char kDefaultNetworkInterface[] = "lo";
-constexpr char kDefaultVoiceType[] = "zh_female_shuangkuaisisi_emo_v2_mars_bigtts";
+constexpr char kDefaultVoiceType[] = "en_female_product_darcie_moon_bigtts";
 constexpr char kRosSetupScript[] = "/home/booster/Workspace/booster_robotics_sdk_ros2/install/setup.bash";
 constexpr char kRosTtsHelper[] = "scripts/ros_rtc_tts.py";
+constexpr char kWhisperLiveAsrHelper[] = "scripts/whisperlive_asr_daemon.py";
 constexpr int kDefaultInterruptSpeechDurationMs = 700;
+constexpr char kBackendRtc[] = "rtc";
+constexpr char kBackendWhisperLiveAsr[] = "whisperlive_asr";
+constexpr char kWhisperLiveAsrStatePath[] = "/tmp/booster_whisperlive_asr_state.json";
+constexpr char kWhisperLiveAsrLogPath[] = "/tmp/booster_whisperlive_asr.log";
 
 #if BOOSTER_DEV_MODE
 constexpr char kDefaultCameraPreviewPath[] = "tmp/booster_camera_preview.jpg";
@@ -124,6 +129,23 @@ std::string ReadFile(const std::string &path) {
     std::ostringstream buffer;
     buffer << input.rdbuf();
     return buffer.str();
+}
+
+json ReadJsonFileIfPresent(const std::string &path) {
+    std::ifstream input(path);
+    if (!input) {
+        return json::object();
+    }
+
+    try {
+        json payload;
+        input >> payload;
+        if (payload.is_object()) {
+            return payload;
+        }
+    } catch (...) {
+    }
+    return json::object();
 }
 
 void SetEnvVar(const std::string &key, const std::string &value) {
@@ -293,6 +315,16 @@ int ParsePercentValue(const std::string &text) {
     return std::stoi(digits);
 }
 
+bool IsProcessRunning(int pid) {
+    if (pid <= 0) {
+        return false;
+    }
+
+    int status = 0;
+    RunCommand("kill -0 " + std::to_string(pid) + " 2>/dev/null", &status);
+    return status == 0;
+}
+
 const RobotModeOption *FindRobotModeById(const std::string &id) {
     for (const auto &option : kRobotModes) {
         if (id == option.id) {
@@ -419,17 +451,42 @@ public:
     }
 
     json StatusJson() const {
+        const json whisperlive_asr = WhisperLiveAsrStatus();
         std::scoped_lock lock(speech_mutex_);
+        std::string last_heard = last_heard_text_;
+        std::string last_spoken = last_spoken_text_;
+        if (whisperlive_asr.is_object()) {
+            const auto helper_last_heard = Trim(whisperlive_asr.value("last_heard", std::string()));
+            if (whisperlive_asr.value("running", false) && !helper_last_heard.empty()) {
+                last_heard = helper_last_heard;
+            }
+            if (whisperlive_asr.value("running", false)) {
+                last_spoken.clear();
+            }
+        }
         return {
             {"network_interface", network_interface_},
             {"domain_id", domain_id_},
             {"dev_mode", static_cast<bool>(BOOSTER_DEV_MODE)},
             {"battery", battery_monitor_ ? battery_monitor_->ToJson() : json::object()},
+            {"speech_backends", {
+                {"rtc", {
+                    {"id", kBackendRtc},
+                    {"label", "Native RTC"},
+                    {"available", true},
+                }},
+                {"whisperlive_asr", {
+                    {"id", kBackendWhisperLiveAsr},
+                    {"label", "WhisperLive ASR"},
+                    {"available", whisperlive_asr.value("available", false)},
+                }},
+            }},
             {"tts_transport", BOOSTER_DEV_MODE ? "mock" : "ros_rtc_service"},
             {"speech_debug", {
-                {"last_heard", last_heard_text_},
-                {"last_spoken", last_spoken_text_},
+                {"last_heard", last_heard},
+                {"last_spoken", last_spoken},
             }},
+            {"whisperlive_asr", whisperlive_asr},
         };
     }
 
@@ -476,6 +533,86 @@ public:
         };
 #else
         return RunRosTtsHelper("stop", json::object());
+#endif
+    }
+
+    json StartWhisperLiveAsr(const std::string &model = std::string()) const {
+#if BOOSTER_DEV_MODE
+        return {
+            {"ok", true},
+            {"action", "whisperlive_asr_start"},
+            {"backend", kBackendWhisperLiveAsr},
+            {"dev_mode", true},
+            {"note", "WhisperLive ASR start is mocked in dev mode."},
+        };
+#else
+        const json stop_result = StopWhisperLiveAsr();
+        const std::string helper_path = ResolveScriptPath("BOOSTER_WHISPERLIVE_ASR_HELPER", kWhisperLiveAsrHelper);
+        const std::string launcher =
+            "import os,subprocess,sys;"
+            "os.environ['BOOSTER_WHISPERLIVE_ASR_LOG_PATH']=sys.argv[2];"
+            "os.environ['BOOSTER_WHISPERLIVE_ASR_STATE_PATH']=sys.argv[3];"
+            "os.environ['BOOSTER_WHISPERLIVE_MODEL']=sys.argv[4];"
+            "log=open(sys.argv[2],'ab', buffering=0);"
+            "proc=subprocess.Popen(['python3', sys.argv[1]], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True);"
+            "print(proc.pid)";
+        const std::string command =
+            "python3 -c " + ShellEscape(launcher) + " " + ShellEscape(helper_path) + " " +
+            ShellEscape(kWhisperLiveAsrLogPath) + " " + ShellEscape(kWhisperLiveAsrStatePath) + " " +
+            ShellEscape(model.empty() ? std::string("base.en") : model);
+
+        int status = 0;
+        const std::string output = RunCommand("bash -lc " + ShellEscape(command), &status);
+        const std::string pid_text = Trim(output);
+        int spawned_pid = 0;
+        try {
+            if (!pid_text.empty()) {
+                spawned_pid = std::stoi(pid_text);
+            }
+        } catch (...) {
+        }
+        json result = {
+            {"ok", status == 0 && !pid_text.empty()},
+            {"action", "whisperlive_asr_start"},
+            {"backend", kBackendWhisperLiveAsr},
+            {"requested_model", model.empty() ? std::string("base.en") : model},
+            {"helper_exit_status", status},
+            {"log_path", kWhisperLiveAsrLogPath},
+            {"state_path", kWhisperLiveAsrStatePath},
+            {"spawned_pid", spawned_pid},
+            {"auto_stop_result", stop_result},
+        };
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        json helper_status = WhisperLiveAsrStatus();
+        for (auto it = helper_status.begin(); it != helper_status.end(); ++it) {
+            result[it.key()] = it.value();
+        }
+        return result;
+#endif
+    }
+
+    json StopWhisperLiveAsr() const {
+#if BOOSTER_DEV_MODE
+        return {
+            {"ok", true},
+            {"action", "whisperlive_asr_stop"},
+            {"backend", kBackendWhisperLiveAsr},
+            {"dev_mode", true},
+            {"note", "WhisperLive ASR stop is mocked in dev mode."},
+        };
+#else
+        const json before = WhisperLiveAsrStatus();
+        const int pid = before.value("pid", 0);
+        if (pid > 0) {
+            RunCommand("kill -TERM " + std::to_string(pid));
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        json result = WhisperLiveAsrStatus();
+        result["ok"] = true;
+        result["action"] = "whisperlive_asr_stop";
+        result["backend"] = kBackendWhisperLiveAsr;
+        result["stopped_pid"] = pid;
+        return result;
 #endif
     }
 
@@ -565,6 +702,30 @@ private:
         }
     }
 #endif
+
+    json WhisperLiveAsrStatus() const {
+        json status = ReadJsonFileIfPresent(kWhisperLiveAsrStatePath);
+        if (!status.is_object() || status.empty()) {
+            return {
+                {"available", std::filesystem::exists(ResolveScriptPath(
+                    "BOOSTER_WHISPERLIVE_ASR_HELPER", kWhisperLiveAsrHelper))},
+                {"running", false},
+                {"state", "stopped"},
+                {"last_heard", ""},
+                {"last_error", ""},
+                {"log_path", kWhisperLiveAsrLogPath},
+                {"state_path", kWhisperLiveAsrStatePath},
+            };
+        }
+        const int pid = status.value("pid", 0);
+        if (!IsProcessRunning(pid)) {
+            status["running"] = false;
+            if (status.value("state", std::string()) != "error") {
+                status["state"] = "stopped";
+            }
+        }
+        return status;
+    }
 
 #if !BOOSTER_DEV_MODE
     json RunRosTtsHelper(const std::string &action, const json &payload) const {
@@ -785,6 +946,24 @@ http::response<http::string_body> HandleRequest(
 
     if (req.method() == http::verb::post && path == "/rtc/tts/stop") {
         return JsonResponse(http::status::ok, wrapper.StopTts());
+    }
+
+    if (req.method() == http::verb::post && path == "/whisperlive/asr/start") {
+        try {
+            const json body = ParseOptionalJsonBody(req.body());
+            const auto model = Trim(body.value("model", std::string("base.en")));
+            return JsonResponse(http::status::ok, wrapper.StartWhisperLiveAsr(model));
+        } catch (const std::exception &e) {
+            return JsonResponse(http::status::bad_request, {
+                {"ok", false},
+                {"error", e.what()},
+                {"path", path},
+            });
+        }
+    }
+
+    if (req.method() == http::verb::post && path == "/whisperlive/asr/stop") {
+        return JsonResponse(http::status::ok, wrapper.StopWhisperLiveAsr());
     }
 
     if (req.method() == http::verb::post && path == "/audio/volume") {

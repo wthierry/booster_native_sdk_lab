@@ -3,7 +3,17 @@ const batteryPercent = document.getElementById("battery-percent");
 const batteryDetails = document.getElementById("battery-details");
 const batteryPill = document.getElementById("battery-pill");
 const debugWindow = document.getElementById("debug-window");
+const heardWindow = document.getElementById("heard-window");
 const copyDebugButton = document.getElementById("copy-debug");
+const backendOptions = Array.from(document.querySelectorAll('input[name="speech-backend"]'));
+const rtcStartButton = document.getElementById("rtc-start");
+const rtcStopButton = document.getElementById("rtc-stop");
+const whisperLiveStartButton = document.getElementById("whisperlive-start");
+const whisperLiveStopButton = document.getElementById("whisperlive-stop");
+const whisperLiveModel = document.getElementById("whisperlive-model");
+const rtcStatus = document.getElementById("rtc-status");
+const whisperLiveStatus = document.getElementById("whisperlive-status");
+const whisperLiveNote = document.getElementById("whisperlive-note");
 const volumeSlider = document.getElementById("volume-slider");
 const volumeValue = document.getElementById("volume-value");
 const enableVideo = document.getElementById("enable-video");
@@ -18,6 +28,30 @@ let copyButtonTimer = null;
 let videoRefreshTimer = null;
 let lastHeardText = "";
 let lastSpokenText = "";
+let selectedBackend = "rtc";
+const whisperLiveModelStorageKey = "booster.whisperlive.model";
+
+function setBackendStatus(element, label, active) {
+  element.textContent = label;
+  element.classList.toggle("backend-status-idle", !active);
+}
+
+function updateBackendControls() {
+  const rtcSelected = selectedBackend === "rtc";
+  const whisperLiveSelected = selectedBackend === "whisperlive_asr";
+
+  rtcStartButton.disabled = !rtcSelected;
+  rtcStopButton.disabled = !rtcSelected;
+  whisperLiveStartButton.disabled = !whisperLiveSelected;
+  whisperLiveStopButton.disabled = !whisperLiveSelected;
+  whisperLiveModel.disabled = !whisperLiveSelected;
+
+  setBackendStatus(rtcStatus, rtcSelected ? "Active" : "Inactive", rtcSelected);
+  setBackendStatus(whisperLiveStatus, whisperLiveSelected ? "Active" : "Inactive", whisperLiveSelected);
+  whisperLiveNote.textContent = whisperLiveSelected
+    ? "WhisperLive ASR listens on the robot mic and posts transcripts into the debug log."
+    : "Select WhisperLive ASR to enable robot-side transcription controls.";
+}
 
 function renderBattery(battery) {
   if (!battery.available) {
@@ -124,7 +158,7 @@ async function refreshSpeechDebug() {
 
   if (heard && heard !== lastHeardText) {
     lastHeardText = heard;
-    appendDebug("Robot heard", heard);
+    heardWindow.textContent = heard;
   }
 
   if (spoken && spoken !== lastSpokenText) {
@@ -189,27 +223,61 @@ videoPreview.addEventListener("error", () => {
   setVideoPreviewState(false, "Robot camera preview is not ready.");
 });
 
-document.getElementById("start-tts").addEventListener("click", async () => {
+rtcStartButton.addEventListener("click", async () => {
   const payload = {
     interrupt_speech_duration: defaultInterruptSpeechDurationMs,
   };
-  appendDebug("/rtc/tts/start request", payload);
+  appendDebug("[Native RTC] /rtc/tts/start request", payload);
   try {
     await postJson("/rtc/tts/start", payload);
   } catch (error) {
-    appendDebug("Start listening error", String(error));
+    appendDebug("[Native RTC] Start listening error", String(error));
   }
 });
 
-document.getElementById("stop-tts").addEventListener("click", async () => {
+rtcStopButton.addEventListener("click", async () => {
   const payload = {};
-  appendDebug("/rtc/tts/stop request", payload);
+  appendDebug("[Native RTC] /rtc/tts/stop request", payload);
   try {
     await postJson("/rtc/tts/stop", payload);
   } catch (error) {
-    appendDebug("Stop listening error", String(error));
+    appendDebug("[Native RTC] Stop listening error", String(error));
   }
 });
+
+whisperLiveStartButton.addEventListener("click", () => {
+  const payload = {
+    model: whisperLiveModel.value,
+  };
+  appendDebug("[WhisperLive ASR] /whisperlive/asr/start request", payload);
+  postJson("/whisperlive/asr/start", payload).catch((error) => {
+    appendDebug("[WhisperLive ASR] Start listening error", String(error));
+  });
+});
+
+whisperLiveStopButton.addEventListener("click", () => {
+  const payload = {};
+  appendDebug("[WhisperLive ASR] /whisperlive/asr/stop request", payload);
+  postJson("/whisperlive/asr/stop", payload).catch((error) => {
+    appendDebug("[WhisperLive ASR] Stop listening error", String(error));
+  });
+});
+
+whisperLiveModel.addEventListener("change", () => {
+  window.localStorage.setItem(whisperLiveModelStorageKey, whisperLiveModel.value);
+  appendDebug("WhisperLive model selected", whisperLiveModel.value);
+});
+
+for (const option of backendOptions) {
+  option.addEventListener("change", () => {
+    if (!option.checked) {
+      return;
+    }
+    selectedBackend = option.value;
+    updateBackendControls();
+    appendDebug("Speech backend selected", selectedBackend === "rtc" ? "Native RTC" : "WhisperLive ASR");
+  });
+}
 
 enableVideo.addEventListener("change", () => {
   if (enableVideo.checked) {
@@ -270,6 +338,17 @@ refreshSpeechDebug().catch((error) => {
   appendDebug("Initial speech debug error", String(error));
 });
 
+if (!lastHeardText) {
+  heardWindow.textContent = "Waiting for speech...";
+}
+
 setVideoPreviewState(false);
 videoStatus.textContent = "Off";
+{
+  const savedModel = window.localStorage.getItem(whisperLiveModelStorageKey);
+  if (savedModel) {
+    whisperLiveModel.value = savedModel;
+  }
+}
+updateBackendControls();
 setCopyButtonState("Copy Log");

@@ -93,6 +93,69 @@ h1 {
   gap: 10px;
 }
 
+.backend-selector {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.backend-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.backend-option input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.backend-panel {
+  margin-bottom: 18px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 252, 247, 0.88);
+}
+
+.backend-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.backend-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #d9ecd4;
+  color: #214b20;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.backend-status-idle {
+  background: #ece4d8;
+  color: var(--muted);
+}
+
+.backend-note {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .battery-card {
   display: grid;
   grid-template-columns: 120px 1fr;
@@ -484,6 +547,16 @@ button:disabled {
   scrollbar-color: rgba(201, 92, 43, 0.8) rgba(255, 255, 255, 0.08);
 }
 
+.heard-window {
+  height: auto;
+  min-height: 120px;
+  max-height: 220px;
+  white-space: pre-wrap;
+  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+  font-size: 18px;
+  line-height: 1.5;
+}
+
 .debug-window::-webkit-scrollbar {
   width: 12px;
 }
@@ -510,6 +583,11 @@ button:disabled {
   }
 
   .video-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .backend-head {
     align-items: flex-start;
     flex-direction: column;
   }

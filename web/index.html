@@ -19,11 +19,56 @@
           <div class="panel-column">
             <div class="panel-head">
               <h2>Controls</h2>
-              <div class="button-row">
-                <button id="start-tts" class="ghost">Start Listening</button>
-                <button id="stop-tts" class="ghost">Stop Listening</button>
+              <div id="backend-selector" class="backend-selector" role="radiogroup" aria-label="Speech backend">
+                <label class="backend-option">
+                  <input id="backend-rtc" type="radio" name="speech-backend" value="rtc" checked>
+                  <span>Native RTC</span>
+                </label>
+                <label class="backend-option">
+                  <input id="backend-whisperlive" type="radio" name="speech-backend" value="whisperlive_asr">
+                  <span>WhisperLive ASR</span>
+                </label>
               </div>
             </div>
+
+            <section class="backend-panel" aria-labelledby="rtc-controls-title">
+              <div class="backend-head">
+                <div>
+                  <h3 id="rtc-controls-title" class="video-title">Native RTC Chat</h3>
+                  <p class="video-copy">Current robot speech path through the native RTC service.</p>
+                </div>
+                <span id="rtc-status" class="backend-status">Active</span>
+              </div>
+              <div class="button-row">
+                <button id="rtc-start" class="ghost">Start Listening</button>
+                <button id="rtc-stop" class="ghost">Stop Listening</button>
+              </div>
+            </section>
+
+            <section class="backend-panel" aria-labelledby="whisperlive-controls-title">
+              <div class="backend-head">
+                <div>
+                  <h3 id="whisperlive-controls-title" class="video-title">WhisperLive ASR</h3>
+                  <p class="video-copy">Robot mic capture with a local WhisperLive transcription service.</p>
+                </div>
+                <span id="whisperlive-status" class="backend-status backend-status-idle">Inactive</span>
+              </div>
+              <div class="button-row">
+                <button id="whisperlive-start" class="ghost">Start Listening</button>
+                <button id="whisperlive-stop" class="ghost">Stop Listening</button>
+              </div>
+              <div class="volume-panel">
+                <div class="volume-head">
+                  <label class="tts-label" for="whisperlive-model">ASR Model</label>
+                </div>
+                <select id="whisperlive-model" class="volume-slider">
+                  <option value="tiny.en">tiny.en</option>
+                  <option value="base.en" selected>base.en</option>
+                  <option value="small.en">small.en</option>
+                </select>
+              </div>
+              <p id="whisperlive-note" class="backend-note">Select WhisperLive ASR to enable robot-side transcription.</p>
+            </section>
 
             <div class="battery-card">
               <div class="battery-shell">
@@ -66,11 +111,21 @@
               </div>
             </section>
 
+            <section class="debug-panel" aria-labelledby="heard-title">
+              <div class="debug-head">
+                <div>
+                  <h3 id="heard-title" class="video-title">Robot Heard</h3>
+                  <p class="video-copy">Latest committed ASR transcript from the selected backend.</p>
+                </div>
+              </div>
+              <pre id="heard-window" class="debug-window heard-window">Waiting for speech...</pre>
+            </section>
+
             <section class="debug-panel" aria-labelledby="debug-title">
               <div class="debug-head">
                 <div>
                   <h3 id="debug-title" class="video-title">Debug Log</h3>
-                  <p class="video-copy">Live requests and transcript events.</p>
+                  <p class="video-copy">Live requests and backend status events.</p>
                 </div>
                 <button id="copy-debug" class="ghost" type="button">Copy Log</button>
               </div>
