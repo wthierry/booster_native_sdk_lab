@@ -313,6 +313,7 @@ document.getElementById("start-tts").addEventListener("click", async () => {
   const payload = {
     voice_type: defaultVoiceType,
     interrupt_speech_duration: defaultInterruptSpeechDurationMs,
+    mode: "conversation",
     video_enabled: enableVideo.checked,
   };
   appendDebug("/rtc/tts/start request", payload);
@@ -320,6 +321,18 @@ document.getElementById("start-tts").addEventListener("click", async () => {
     await postJson("/rtc/tts/start", payload);
   } catch (error) {
     appendDebug("Start listening error", String(error));
+  }
+});
+
+document.getElementById("start-asr-only").addEventListener("click", async () => {
+  const payload = {
+    mode: "asr_only",
+  };
+  appendDebug("/rtc/tts/start request", payload);
+  try {
+    await postJson("/rtc/tts/start", payload);
+  } catch (error) {
+    appendDebug("Start ASR-only error", String(error));
   }
 });
 
@@ -341,10 +354,14 @@ document.getElementById("speak-tts").addEventListener("click", () => {
 });
 
 document.getElementById("stop-tts").addEventListener("click", async () => {
-  const payload = {};
-  appendDebug("/rtc/tts/stop request", payload);
   try {
-    await postJson("/rtc/tts/stop", payload);
+    const conversationPayload = { mode: "conversation" };
+    appendDebug("/rtc/tts/stop request", conversationPayload);
+    await postJson("/rtc/tts/stop", conversationPayload);
+
+    const asrOnlyPayload = { mode: "asr_only" };
+    appendDebug("/rtc/tts/stop request", asrOnlyPayload);
+    await postJson("/rtc/tts/stop", asrOnlyPayload);
   } catch (error) {
     appendDebug("Stop TTS error", String(error));
   }
