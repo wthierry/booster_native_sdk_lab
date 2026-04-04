@@ -15,10 +15,6 @@ const videoPlaceholder = document.getElementById("video-placeholder");
 const videoStatus = document.getElementById("video-status");
 const videoFrame = videoPreview.closest(".video-frame");
 const visionSummary = document.getElementById("vision-summary");
-const openAiVoicePanel = document.getElementById("openai-voice-panel");
-const openAiVoiceStatus = document.getElementById("openai-voice-status");
-const startOpenAiVoiceButton = document.getElementById("start-openai-voice");
-const stopOpenAiVoiceButton = document.getElementById("stop-openai-voice");
 const defaultVoiceType = "zh_female_shuangkuaisisi_emo_v2_mars_bigtts";
 const defaultInterruptSpeechDurationMs = 200;
 let volumeUpdateTimer = null;
@@ -31,7 +27,6 @@ let lastOpenAiErrorText = "";
 let copyButtonTimer = null;
 let currentMode = "";
 let isDevMode = false;
-let robotOpenAiVoiceStatus = null;
 
 function modeLabel(mode) {
   return mode?.label || mode?.id || "Unknown";
@@ -129,19 +124,6 @@ function setVisionSummary(text, isError = false) {
   visionSummary.classList.toggle("is-error", Boolean(text) && isError);
 }
 
-function setOpenAiVoiceStatus(text) {
-  openAiVoiceStatus.textContent = text;
-}
-
-function setOpenAiVoiceButtons(isConnected) {
-  startOpenAiVoiceButton.disabled = isConnected;
-  stopOpenAiVoiceButton.disabled = !isConnected;
-}
-
-function isRobotRuntime() {
-  return !isDevMode;
-}
-
 function renderBattery(battery) {
   if (!battery.available) {
     batteryLevel.style.width = "0%";
@@ -214,37 +196,6 @@ async function refreshSpeechDebug() {
   if (!openAiVision && !openAiError && !visionSummary.textContent.trim()) {
     setVisionSummary("No image description yet.");
   }
-
-  const robotVoice = data?.wrapper?.openai_robot_voice || {};
-  robotOpenAiVoiceStatus = robotVoice;
-  if (isRobotRuntime()) {
-    openAiVoicePanel.hidden = false;
-    if (!robotVoice.available) {
-      setOpenAiVoiceButtons(false);
-      startOpenAiVoiceButton.disabled = true;
-      setOpenAiVoiceStatus("Set CHATGPT_API_KEY or OPENAI_API_KEY in .env to enable Robot OpenAI voice.");
-    } else if (robotVoice.running) {
-      setOpenAiVoiceButtons(true);
-      const heard = typeof robotVoice.last_heard === "string" && robotVoice.last_heard.trim()
-        ? `Heard: ${robotVoice.last_heard.trim()}`
-        : "Listening on the robot microphone.";
-      setOpenAiVoiceStatus(
-        `Robot OpenAI voice is ${robotVoice.state || "running"} on the robot speaker. ${heard}`
-      );
-    } else {
-      setOpenAiVoiceButtons(false);
-      if (robotVoice.state === "error" && robotVoice.last_error) {
-        setOpenAiVoiceStatus(`Robot OpenAI voice error: ${robotVoice.last_error}`);
-      } else {
-        setOpenAiVoiceStatus("Robot OpenAI voice is stopped. Start it to use the robot microphone and speaker.");
-      }
-    }
-  } else {
-    openAiVoicePanel.hidden = true;
-    setOpenAiVoiceStatus("Robot OpenAI voice is only available when the wrapper is running on the robot.");
-    startOpenAiVoiceButton.disabled = true;
-    stopOpenAiVoiceButton.disabled = true;
-  }
 }
 
 async function refreshRobotMode() {
@@ -286,20 +237,6 @@ async function postJson(path, payload) {
   const data = await response.json();
   appendDebug(`${path} response`, data);
   return data;
-}
-
-async function startOpenAiVoiceConnection() {
-  const response = await fetch("/openai/robot-voice/start", {
-    method: "POST",
-  });
-  const data = await response.json();
-  appendDebug("/openai/robot-voice/start response", data);
-  if (!response.ok || !data.ok) {
-    throw new Error(data.error || "Robot OpenAI voice failed to start.");
-  }
-  robotOpenAiVoiceStatus = data;
-  setOpenAiVoiceButtons(true);
-  setOpenAiVoiceStatus("Robot OpenAI voice is starting on the robot.");
 }
 
 async function refreshVolume() {
@@ -411,36 +348,6 @@ document.getElementById("stop-tts").addEventListener("click", async () => {
   } catch (error) {
     appendDebug("Stop TTS error", String(error));
   }
-});
-
-startOpenAiVoiceButton.addEventListener("click", async () => {
-  try {
-    await startOpenAiVoiceConnection();
-  } catch (error) {
-    appendDebug("OpenAI voice start error", String(error));
-    setOpenAiVoiceButtons(false);
-    setOpenAiVoiceStatus(`Robot OpenAI voice failed: ${String(error)}`);
-  }
-});
-
-stopOpenAiVoiceButton.addEventListener("click", () => {
-  fetch("/openai/robot-voice/stop", {
-    method: "POST",
-  })
-    .then((response) => response.json().then((data) => ({ response, data })))
-    .then(({ response, data }) => {
-      appendDebug("/openai/robot-voice/stop response", data);
-      if (!response.ok || !data.ok) {
-        throw new Error(data.error || "Robot OpenAI voice failed to stop.");
-      }
-      robotOpenAiVoiceStatus = data;
-      setOpenAiVoiceButtons(false);
-      setOpenAiVoiceStatus("Robot OpenAI voice is stopped.");
-    })
-    .catch((error) => {
-      appendDebug("Robot OpenAI voice stop error", String(error));
-      setOpenAiVoiceStatus(`Robot OpenAI voice stop failed: ${String(error)}`);
-    });
 });
 
 document.getElementById("wave-hand").addEventListener("click", async () => {
@@ -562,5 +469,3 @@ setVideoPreviewState(false);
 videoStatus.textContent = "Off";
 setVisionSummary("No image description yet.");
 setCopyButtonState("Copy Log");
-setOpenAiVoiceButtons(false);
-setOpenAiVoiceStatus("Checking OpenAI voice availability...");
