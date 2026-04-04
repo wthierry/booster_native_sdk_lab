@@ -51,6 +51,7 @@ constexpr char kRosSetupScript[] = "/home/booster/Workspace/booster_robotics_sdk
 constexpr char kRosTtsHelper[] = "scripts/ros_rtc_tts.py";
 constexpr char kOpenAiVisionHelper[] = "scripts/openai_vision.py";
 constexpr char kOpenAiRealtimeCallHelper[] = "scripts/openai_realtime_call.py";
+constexpr char kOpenAiRobotVoiceHelper[] = "scripts/openai_robot_voice.py";
 constexpr char kOpenAiTextHelper[] = "scripts/openai_text_chat.py";
 constexpr int kDefaultInterruptSpeechDurationMs = 200;
 
@@ -479,6 +480,10 @@ public:
 
     json StatusJson() const {
         std::scoped_lock lock(speech_mutex_, robot_mode_mutex_);
+        const json robot_openai_voice = RobotOpenAiVoiceStatusJson();
+        const std::string robot_voice_last_heard = Trim(robot_openai_voice.value("last_heard", std::string()));
+        const std::string robot_voice_last_spoken = Trim(robot_openai_voice.value("last_spoken", std::string()));
+        const std::string robot_voice_last_error = Trim(robot_openai_voice.value("last_error", std::string()));
         return {
             {"network_interface", network_interface_},
             {"domain_id", domain_id_},
@@ -491,11 +496,12 @@ public:
             }},
             {"openai_realtime", OpenAiRealtimeStatusJson()},
             {"openai_text", OpenAiTextStatusJson()},
+            {"openai_robot_voice", robot_openai_voice},
             {"speech_debug", {
-                {"last_heard", last_heard_text_},
-                {"last_spoken", last_spoken_text_},
+                {"last_heard", robot_voice_last_heard.empty() ? last_heard_text_ : robot_voice_last_heard},
+                {"last_spoken", robot_voice_last_spoken.empty() ? last_spoken_text_ : robot_voice_last_spoken},
                 {"last_openai_vision", last_openai_vision_text_},
-                {"last_openai_error", last_openai_error_},
+                {"last_openai_error", robot_voice_last_error.empty() ? last_openai_error_ : robot_voice_last_error},
             }},
         };
     }
@@ -536,6 +542,18 @@ public:
             {"available", HasAnyOpenAiApiKey()},
             {"model", config.value("model", "gpt-4.1-mini")},
         };
+    }
+
+    json RobotOpenAiVoiceStatusJson() const {
+        return RunOpenAiRobotVoiceHelper("status");
+    }
+
+    json StartRobotOpenAiVoice() const {
+        return RunOpenAiRobotVoiceHelper("start");
+    }
+
+    json StopRobotOpenAiVoice() const {
+        return RunOpenAiRobotVoiceHelper("stop");
     }
 
     json CreateOpenAiRealtimeCall(const std::string &offer_sdp) const {
@@ -898,6 +916,34 @@ private:
         return result;
     }
 
+    json RunOpenAiRobotVoiceHelper(const std::string &action) const {
+        const std::string command =
+            "python3 " +
+            ShellEscape(ResolveScriptPath("BOOSTER_OPENAI_ROBOT_VOICE_HELPER", kOpenAiRobotVoiceHelper)) + " " +
+            ShellEscape(action);
+
+        int status = 0;
+        const auto output = RunCommand(command, &status);
+        json result = ParseJsonOrRawString(output);
+        if (!result.is_object()) {
+            return {
+                {"ok", false},
+                {"code", status},
+                {"action", action},
+                {"error", "Unexpected OpenAI robot voice helper output"},
+                {"raw_output", Trim(output)},
+            };
+        }
+        result["helper_exit_status"] = status;
+        if (!result.contains("ok")) {
+            result["ok"] = status == 0;
+        }
+        if (!result.contains("action")) {
+            result["action"] = action;
+        }
+        return result;
+    }
+
 #if !BOOSTER_DEV_MODE
     json RunRosTtsHelper(const std::string &action, const json &payload) const {
         const std::string command =
@@ -1085,6 +1131,12 @@ http::response<http::string_body> HandleRequest(
         return JsonResponse(status, result);
     }
 
+    if (req.method() == http::verb::get && path == "/openai/robot-voice/status") {
+        const auto result = wrapper.RobotOpenAiVoiceStatusJson();
+        const auto status = result.value("ok", false) ? http::status::ok : http::status::service_unavailable;
+        return JsonResponse(status, result);
+    }
+
     if (req.method() == http::verb::get && path == "/battery") {
         return JsonResponse(http::status::ok, {
             {"ok", true},
@@ -1191,6 +1243,18 @@ http::response<http::string_body> HandleRequest(
                 {"path", path},
             });
         }
+    }
+
+    if (req.method() == http::verb::post && path == "/openai/robot-voice/start") {
+        const auto result = wrapper.StartRobotOpenAiVoice();
+        const auto status = result.value("ok", false) ? http::status::ok : http::status::service_unavailable;
+        return JsonResponse(status, result);
+    }
+
+    if (req.method() == http::verb::post && path == "/openai/robot-voice/stop") {
+        const auto result = wrapper.StopRobotOpenAiVoice();
+        const auto status = result.value("ok", false) ? http::status::ok : http::status::service_unavailable;
+        return JsonResponse(status, result);
     }
 
     if (req.method() == http::verb::post && path == "/robot/wave-hand") {

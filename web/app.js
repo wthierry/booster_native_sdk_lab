@@ -31,11 +31,7 @@ let lastOpenAiErrorText = "";
 let copyButtonTimer = null;
 let currentMode = "";
 let isDevMode = false;
-let openAiRealtimeConfig = null;
-let openAiPeerConnection = null;
-let openAiEventChannel = null;
-let openAiMicStream = null;
-let openAiRemoteAudio = null;
+let robotOpenAiVoiceStatus = null;
 
 function modeLabel(mode) {
   return mode?.label || mode?.id || "Unknown";
@@ -146,31 +142,6 @@ function isRobotRuntime() {
   return !isDevMode;
 }
 
-function getOpenAiVoiceSupport() {
-  if (typeof window.RTCPeerConnection !== "function") {
-    return {
-      ok: false,
-      reason: "This browser does not support WebRTC peer connections.",
-    };
-  }
-
-  if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
-    const host = window.location.hostname;
-    const isLocalHost = host === "localhost" || host === "127.0.0.1" || host === "::1";
-    return {
-      ok: false,
-      reason: isLocalHost
-        ? "This browser does not expose microphone access on this page."
-        : "Microphone access is unavailable here. Open the UI from https or from http://localhost:8080 on the same machine.",
-    };
-  }
-
-  return {
-    ok: true,
-    reason: "",
-  };
-}
-
 function renderBattery(battery) {
   if (!battery.available) {
     batteryLevel.style.width = "0%";
@@ -244,37 +215,35 @@ async function refreshSpeechDebug() {
     setVisionSummary("No image description yet.");
   }
 
-  const realtime = data?.wrapper?.openai_realtime || {};
+  const robotVoice = data?.wrapper?.openai_robot_voice || {};
+  robotOpenAiVoiceStatus = robotVoice;
   if (isRobotRuntime()) {
     openAiVoicePanel.hidden = false;
-    if (realtime.available) {
-      openAiRealtimeConfig = realtime;
-      const support = getOpenAiVoiceSupport();
-      if (!support.ok) {
-        setOpenAiVoiceButtons(false);
-        startOpenAiVoiceButton.disabled = true;
-        setOpenAiVoiceStatus(
-          `Robot OpenAI voice is unavailable in this browser context. ${support.reason}`
-        );
-      } else {
-        setOpenAiVoiceStatus(
-          openAiPeerConnection
-            ? `Connected to ${realtime.model} with voice ${realtime.voice}.`
-            : `Ready to connect to ${realtime.model} with voice ${realtime.voice}.`
-        );
-        startOpenAiVoiceButton.disabled = Boolean(openAiPeerConnection);
-      }
-    } else {
-      openAiRealtimeConfig = null;
-      setOpenAiVoiceStatus("Set CHATGPT_API_KEY or OPENAI_API_KEY in .env to enable Robot OpenAI voice.");
+    if (!robotVoice.available) {
       setOpenAiVoiceButtons(false);
+      startOpenAiVoiceButton.disabled = true;
+      setOpenAiVoiceStatus("Set CHATGPT_API_KEY or OPENAI_API_KEY in .env to enable Robot OpenAI voice.");
+    } else if (robotVoice.running) {
+      setOpenAiVoiceButtons(true);
+      const heard = typeof robotVoice.last_heard === "string" && robotVoice.last_heard.trim()
+        ? `Heard: ${robotVoice.last_heard.trim()}`
+        : "Listening on the robot microphone.";
+      setOpenAiVoiceStatus(
+        `Robot OpenAI voice is ${robotVoice.state || "running"} on the robot speaker. ${heard}`
+      );
+    } else {
+      setOpenAiVoiceButtons(false);
+      if (robotVoice.state === "error" && robotVoice.last_error) {
+        setOpenAiVoiceStatus(`Robot OpenAI voice error: ${robotVoice.last_error}`);
+      } else {
+        setOpenAiVoiceStatus("Robot OpenAI voice is stopped. Start it to use the robot microphone and speaker.");
+      }
     }
   } else {
     openAiVoicePanel.hidden = true;
-    openAiRealtimeConfig = null;
-    closeOpenAiVoiceConnection();
     setOpenAiVoiceStatus("Robot OpenAI voice is only available when the wrapper is running on the robot.");
     startOpenAiVoiceButton.disabled = true;
+    stopOpenAiVoiceButton.disabled = true;
   }
 }
 
@@ -319,147 +288,18 @@ async function postJson(path, payload) {
   return data;
 }
 
-async function fetchOpenAiRealtimeConfig() {
-  const response = await fetch("/openai/realtime/config");
-  const data = await response.json();
-  if (!response.ok || !data.available) {
-    throw new Error(data.error || "OpenAI Realtime is unavailable.");
-  }
-  openAiRealtimeConfig = data;
-  return data;
-}
-
-function closeOpenAiVoiceConnection() {
-  if (openAiEventChannel) {
-    try {
-      openAiEventChannel.close();
-    } catch (error) {
-      appendDebug("OpenAI voice channel close error", String(error));
-    }
-    openAiEventChannel = null;
-  }
-
-  if (openAiPeerConnection) {
-    try {
-      openAiPeerConnection.close();
-    } catch (error) {
-      appendDebug("OpenAI voice peer close error", String(error));
-    }
-    openAiPeerConnection = null;
-  }
-
-  if (openAiMicStream) {
-    for (const track of openAiMicStream.getTracks()) {
-      track.stop();
-    }
-    openAiMicStream = null;
-  }
-
-  if (openAiRemoteAudio) {
-    openAiRemoteAudio.srcObject = null;
-  }
-
-  setOpenAiVoiceButtons(false);
-  if (isRobotRuntime() && openAiRealtimeConfig?.available) {
-    setOpenAiVoiceStatus(
-      `Ready to connect to ${openAiRealtimeConfig.model} with voice ${openAiRealtimeConfig.voice}.`
-    );
-  }
-}
-
 async function startOpenAiVoiceConnection() {
-  if (openAiPeerConnection) {
-    return;
-  }
-
-  const config = openAiRealtimeConfig || (await fetchOpenAiRealtimeConfig());
-  const support = getOpenAiVoiceSupport();
-  if (!support.ok) {
-    throw new Error(support.reason);
-  }
-  const pc = new RTCPeerConnection();
-  openAiPeerConnection = pc;
-  openAiRemoteAudio = document.createElement("audio");
-  openAiRemoteAudio.autoplay = true;
-  openAiRemoteAudio.playsInline = true;
-
-  pc.addEventListener("connectionstatechange", () => {
-    const state = pc.connectionState;
-    appendDebug("OpenAI voice connection state", state);
-    if (state === "connected") {
-      setOpenAiVoiceStatus(`Connected to ${config.model} with voice ${config.voice}.`);
-      setOpenAiVoiceButtons(true);
-    } else if (state === "failed" || state === "closed" || state === "disconnected") {
-      closeOpenAiVoiceConnection();
-    }
-  });
-
-  pc.ontrack = (event) => {
-    openAiRemoteAudio.srcObject = event.streams[0];
-  };
-
-  openAiMicStream = await navigator.mediaDevices.getUserMedia({
-    audio: {
-      channelCount: 1,
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
-    },
-  });
-  for (const track of openAiMicStream.getTracks()) {
-    pc.addTrack(track, openAiMicStream);
-  }
-
-  const dc = pc.createDataChannel("oai-events");
-  openAiEventChannel = dc;
-  dc.addEventListener("open", () => {
-    appendDebug("OpenAI voice data channel", "open");
-    setOpenAiVoiceStatus(`Connected to ${config.model} with voice ${config.voice}.`);
-    setOpenAiVoiceButtons(true);
-  });
-  dc.addEventListener("message", (event) => {
-    try {
-      const payload = JSON.parse(event.data);
-      if (
-        payload.type === "response.audio_transcript.done" ||
-        payload.type === "conversation.item.input_audio_transcription.completed"
-      ) {
-        appendDebug(`OpenAI ${payload.type}`, payload.transcript || payload.text || payload);
-      }
-    } catch (error) {
-      appendDebug("OpenAI voice event parse error", String(error));
-    }
-  });
-
-  setOpenAiVoiceStatus("Opening OpenAI WebRTC session...");
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-
-  const response = await fetch("/openai/realtime/call", {
+  const response = await fetch("/openai/robot-voice/start", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/sdp",
-    },
-    body: offer.sdp,
   });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    closeOpenAiVoiceConnection();
-    throw new Error(errorText || "OpenAI Realtime call failed.");
+  const data = await response.json();
+  appendDebug("/openai/robot-voice/start response", data);
+  if (!response.ok || !data.ok) {
+    throw new Error(data.error || "Robot OpenAI voice failed to start.");
   }
-
-  const answerSdp = await response.text();
-  await pc.setRemoteDescription({
-    type: "answer",
-    sdp: answerSdp,
-  });
-
-  appendDebug("OpenAI voice session", {
-    model: config.model,
-    voice: config.voice,
-    transport: "webrtc",
-  });
+  robotOpenAiVoiceStatus = data;
+  setOpenAiVoiceButtons(true);
+  setOpenAiVoiceStatus("Robot OpenAI voice is starting on the robot.");
 }
 
 async function refreshVolume() {
@@ -578,14 +418,29 @@ startOpenAiVoiceButton.addEventListener("click", async () => {
     await startOpenAiVoiceConnection();
   } catch (error) {
     appendDebug("OpenAI voice start error", String(error));
-    closeOpenAiVoiceConnection();
-    setOpenAiVoiceStatus(`OpenAI voice failed: ${String(error)}`);
+    setOpenAiVoiceButtons(false);
+    setOpenAiVoiceStatus(`Robot OpenAI voice failed: ${String(error)}`);
   }
 });
 
 stopOpenAiVoiceButton.addEventListener("click", () => {
-  appendDebug("OpenAI voice", "stopped");
-  closeOpenAiVoiceConnection();
+  fetch("/openai/robot-voice/stop", {
+    method: "POST",
+  })
+    .then((response) => response.json().then((data) => ({ response, data })))
+    .then(({ response, data }) => {
+      appendDebug("/openai/robot-voice/stop response", data);
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error || "Robot OpenAI voice failed to stop.");
+      }
+      robotOpenAiVoiceStatus = data;
+      setOpenAiVoiceButtons(false);
+      setOpenAiVoiceStatus("Robot OpenAI voice is stopped.");
+    })
+    .catch((error) => {
+      appendDebug("Robot OpenAI voice stop error", String(error));
+      setOpenAiVoiceStatus(`Robot OpenAI voice stop failed: ${String(error)}`);
+    });
 });
 
 document.getElementById("wave-hand").addEventListener("click", async () => {
@@ -709,11 +564,3 @@ setVisionSummary("No image description yet.");
 setCopyButtonState("Copy Log");
 setOpenAiVoiceButtons(false);
 setOpenAiVoiceStatus("Checking OpenAI voice availability...");
-
-window.addEventListener("beforeunload", () => {
-  closeOpenAiVoiceConnection();
-});
-
-window.addEventListener("pagehide", () => {
-  closeOpenAiVoiceConnection();
-});
