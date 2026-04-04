@@ -7,15 +7,17 @@ import subprocess
 import sys
 
 
-WELCOME_MSG = "Hello."
+WELCOME_MSG = ""
 SYSTEM_PROMPT = """
 ## prompt
 You're a robot named Booster that offers emotional chatting to users with a dry, sarcastic sense of humor.
 Always respond in English.
 Be witty, teasing, and lightly deadpan while still being genuinely helpful.
 Keep the sarcasm playful and clever, not cruel or bullying.
-Keep responses to 1 or 2 sentences when possible.
-Only give a longer, more detailed answer when the user is clearly asking a detailed question or requests more depth.
+Keep responses to exactly 1 short sentence unless the user explicitly asks for more detail.
+Do not ask follow-up questions.
+Do not add a second sentence unless it is required to answer correctly.
+Do not continue the conversation on your own after answering.
 
 
 ## skill
@@ -25,9 +27,6 @@ My style is clever, mildly sarcastic, and entertaining.
 
 API_START_AI_CHAT = 2000
 API_STOP_AI_CHAT = 2001
-API_SPEAK = 2002
-API_START_ASR = 1000
-API_STOP_ASR = 1001
 SERVICE_TYPE = "booster_interface/srv/RpcService"
 SERVICE_NAME = "booster_rtc_service"
 DEFAULT_INTERRUPT_SPEECH_DURATION_MS = 700
@@ -136,7 +135,7 @@ def main():
             "ok": False,
             "code": 400,
             "action": "usage",
-            "error": "Usage: ros_rtc_tts.py <start|speak|stop> <json-payload>",
+            "error": "Usage: ros_rtc_tts.py <start|stop> <json-payload>",
         })
         return 1
 
@@ -154,7 +153,6 @@ def main():
 
     if action == "start":
         voice_type = resolve_voice_type(payload)
-        mode = str(payload.get("mode", "conversation")).strip() or "conversation"
         interrupt_speech_duration = int(
             payload.get("interrupt_speech_duration", DEFAULT_INTERRUPT_SPEECH_DURATION_MS)
         )
@@ -166,68 +164,31 @@ def main():
         interrupt_keywords = [str(keyword).strip() for keyword in interrupt_keywords if str(keyword).strip()]
         if not interrupt_keywords:
             interrupt_keywords = list(DEFAULT_INTERRUPT_KEYWORDS)
-        if mode == "conversation":
-            request_payload = {
-                "interrupt_mode": True,
-                "asr_config": {
-                    "interrupt_speech_duration": interrupt_speech_duration,
-                    "interrupt_keywords": interrupt_keywords,
-                },
-                "llm_config": {
-                    "system_prompt": SYSTEM_PROMPT,
-                    "welcome_msg": WELCOME_MSG,
-                    "prompt_name": "",
-                },
-                "tts_config": {
-                    "ignore_bracket_text": [3],
-                },
-                "enable_face_tracking": False,
-            }
-            if voice_type:
-                request_payload["tts_config"]["voice_type"] = voice_type
-            body = json.dumps(request_payload)
-            result = send_rpc(API_START_AI_CHAT, body, "start_tts")
-        elif mode == "asr_only":
-            result = send_rpc(API_START_ASR, "", "start_asr")
-        else:
-            print_json({
-                "ok": False,
-                "code": 400,
-                "action": "start",
-                "error": f"Unknown mode: {mode}",
-            })
-            return 1
+        request_payload = {
+            "interrupt_mode": True,
+            "asr_config": {
+                "interrupt_speech_duration": interrupt_speech_duration,
+                "interrupt_keywords": interrupt_keywords,
+            },
+            "llm_config": {
+                "system_prompt": SYSTEM_PROMPT,
+                "welcome_msg": WELCOME_MSG,
+                "prompt_name": "",
+            },
+            "tts_config": {
+                "ignore_bracket_text": [3],
+            },
+            "enable_face_tracking": False,
+        }
+        if voice_type:
+            request_payload["tts_config"]["voice_type"] = voice_type
+        body = json.dumps(request_payload)
+        result = send_rpc(API_START_AI_CHAT, body, "start_tts")
         result["voice_type"] = voice_type
-        result["mode"] = mode
         result["interrupt_speech_duration"] = interrupt_speech_duration
         result["interrupt_keywords"] = interrupt_keywords
-    elif action == "speak":
-        text = str(payload.get("text", "")).strip()
-        if not text:
-            print_json({
-                "ok": False,
-                "code": 400,
-                "action": "speak_tts",
-                "error": "Missing text",
-            })
-            return 1
-        result = send_rpc(API_SPEAK, json.dumps({"msg": text}), "speak_tts")
-        result["text"] = text
     elif action == "stop":
-        mode = str(payload.get("mode", "conversation")).strip() or "conversation"
-        if mode == "conversation":
-            result = send_rpc(API_STOP_AI_CHAT, "", "stop_tts")
-        elif mode == "asr_only":
-            result = send_rpc(API_STOP_ASR, "", "stop_asr")
-        else:
-            print_json({
-                "ok": False,
-                "code": 400,
-                "action": "stop",
-                "error": f"Unknown mode: {mode}",
-            })
-            return 1
-        result["mode"] = mode
+        result = send_rpc(API_STOP_AI_CHAT, "", "stop_tts")
     else:
         print_json({
             "ok": False,

@@ -3,29 +3,25 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Booster Battery Console</title>
+    <title>Booster Speech Console</title>
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
     <main class="page">
       <section class="hero">
         <p class="eyebrow">Booster Robot</p>
-        <h1>Battery Console</h1>
-        <p class="lede">Minimal battery-only view running directly on the robot.</p>
+        <h1>Speech Console</h1>
+        <p class="lede">Minimal listening console running directly on the robot.</p>
       </section>
 
       <section class="panel">
         <div class="panel-grid">
           <div class="panel-column">
             <div class="panel-head">
-              <h2>Battery Status</h2>
+              <h2>Controls</h2>
               <div class="button-row">
-                <button id="refresh-battery" class="ghost">Refresh</button>
                 <button id="start-tts" class="ghost">Start Listening</button>
-                <button id="start-asr-only" class="ghost">ASR Only</button>
-                <button id="speak-tts" class="ghost">Speak</button>
-                <button id="stop-tts" class="ghost">Stop TTS</button>
-                <button id="wave-hand" class="ghost">Wave Hand</button>
+                <button id="stop-tts" class="ghost">Stop Listening</button>
               </div>
             </div>
 
@@ -38,17 +34,6 @@
                 <div id="battery-percent" class="battery-main">--%</div>
                 <div id="battery-details" class="summary">Waiting for battery data...</div>
               </div>
-            </div>
-
-            <div class="tts-panel">
-              <label class="tts-label" for="tts-text">Speak Text</label>
-              <textarea id="tts-text" class="tts-input" rows="4">hello from the ROS RTC TTS wrapper</textarea>
-            </div>
-
-            <div class="mode-row">
-              <label class="tts-label" for="mode-select">Mode</label>
-              <select id="mode-select" class="mode-select" aria-describedby="mode-note"></select>
-              <p id="mode-note" class="mode-note">Loading current mode...</p>
             </div>
 
             <div class="volume-panel">
@@ -81,21 +66,11 @@
               </div>
             </section>
 
-            <section class="vision-panel" aria-labelledby="vision-summary-title">
-              <div class="vision-head">
-                <div>
-                  <h3 id="vision-summary-title" class="vision-title">Latest Image Description</h3>
-                  <p class="vision-copy">This is the most recent OpenAI vision result from a spoken camera question.</p>
-                </div>
-              </div>
-              <div id="vision-summary" class="vision-summary is-empty">No image description yet.</div>
-            </section>
-
             <section class="debug-panel" aria-labelledby="debug-title">
               <div class="debug-head">
                 <div>
-                  <h3 id="debug-title" class="vision-title">Debug Log</h3>
-                  <p class="vision-copy">Live requests, transcript events, and vision activity.</p>
+                  <h3 id="debug-title" class="video-title">Debug Log</h3>
+                  <p class="video-copy">Live requests and transcript events.</p>
                 </div>
                 <button id="copy-debug" class="ghost" type="button">Copy Log</button>
               </div>

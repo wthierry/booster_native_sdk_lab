@@ -4,9 +4,6 @@ const batteryDetails = document.getElementById("battery-details");
 const batteryPill = document.getElementById("battery-pill");
 const debugWindow = document.getElementById("debug-window");
 const copyDebugButton = document.getElementById("copy-debug");
-const ttsText = document.getElementById("tts-text");
-const modeSelect = document.getElementById("mode-select");
-const modeNote = document.getElementById("mode-note");
 const volumeSlider = document.getElementById("volume-slider");
 const volumeValue = document.getElementById("volume-value");
 const enableVideo = document.getElementById("enable-video");
@@ -14,55 +11,42 @@ const videoPreview = document.getElementById("video-preview");
 const videoPlaceholder = document.getElementById("video-placeholder");
 const videoStatus = document.getElementById("video-status");
 const videoFrame = videoPreview.closest(".video-frame");
-const visionSummary = document.getElementById("vision-summary");
-const defaultVoiceType = "";
+
 const defaultInterruptSpeechDurationMs = 700;
 let volumeUpdateTimer = null;
+let copyButtonTimer = null;
 let videoRefreshTimer = null;
-let visionRefreshTimer = null;
 let lastHeardText = "";
 let lastSpokenText = "";
-let lastOpenAiVisionText = "";
-let lastOpenAiErrorText = "";
-let copyButtonTimer = null;
-let currentMode = "";
-let isDevMode = false;
 
-function modeLabel(mode) {
-  return mode?.label || mode?.id || "Unknown";
-}
-
-function setModeNote(text) {
-  modeNote.textContent = text;
-}
-
-function renderModeOptions(data) {
-  const modes = Array.isArray(data?.modes) ? data.modes : [];
-  const selectedMode = typeof data?.current_mode?.id === "string" ? data.current_mode.id : currentMode;
-  currentMode = selectedMode;
-
-  modeSelect.innerHTML = "";
-  for (const mode of modes) {
-    const option = document.createElement("option");
-    option.value = mode.id;
-    option.textContent = modeLabel(mode);
-    option.selected = mode.id === selectedMode;
-    modeSelect.appendChild(option);
-  }
-
-  modeSelect.disabled = modes.length === 0;
-  if (!modes.length) {
-    setModeNote("No robot modes available.");
+function renderBattery(battery) {
+  if (!battery.available) {
+    batteryLevel.style.width = "0%";
+    batteryPercent.textContent = "--%";
+    batteryDetails.textContent = "Waiting for battery data...";
+    batteryPill.textContent = "Waiting";
+    batteryPill.className = "pill";
     return;
   }
 
-  const activeMode =
-    modes.find((mode) => mode.id === selectedMode) ||
-    (data?.current_mode && typeof data.current_mode === "object" ? data.current_mode : null);
-  if (activeMode?.description) {
-    setModeNote(`Current mode: ${modeLabel(activeMode)}. ${activeMode.description}`);
+  const soc = Math.max(0, Math.min(100, Number(battery.soc_percent ?? 0)));
+  batteryLevel.style.width = `${soc}%`;
+  batteryPercent.textContent = `${soc.toFixed(1)}%`;
+  batteryDetails.innerHTML = `
+    <div><strong>Voltage:</strong> ${Number(battery.voltage_v ?? 0).toFixed(2)} V</div>
+    <div><strong>Current:</strong> ${Number(battery.current_a ?? 0).toFixed(2)} A</div>
+    <div><strong>Average:</strong> ${Number(battery.average_voltage_v ?? 0).toFixed(2)} V</div>
+  `;
+
+  if (soc >= 50) {
+    batteryPill.textContent = "Good";
+    batteryPill.className = "pill pill-good";
+  } else if (soc >= 20) {
+    batteryPill.textContent = "Low";
+    batteryPill.className = "pill pill-warn";
   } else {
-    setModeNote(selectedMode ? `Current mode: ${selectedMode}` : "Current mode unavailable.");
+    batteryPill.textContent = "Critical";
+    batteryPill.className = "pill pill-bad";
   }
 }
 
@@ -118,114 +102,6 @@ async function copyText(text) {
   }
 }
 
-function setVisionSummary(text, isError = false) {
-  visionSummary.textContent = text;
-  visionSummary.classList.toggle("is-empty", !text);
-  visionSummary.classList.toggle("is-error", Boolean(text) && isError);
-}
-
-function renderBattery(battery) {
-  if (!battery.available) {
-    batteryLevel.style.width = "0%";
-    batteryPercent.textContent = "--%";
-    batteryDetails.textContent = "Waiting for battery data...";
-    batteryPill.textContent = "Waiting";
-    batteryPill.className = "pill";
-    return;
-  }
-
-  const soc = Math.max(0, Math.min(100, Number(battery.soc_percent ?? 0)));
-  batteryLevel.style.width = `${soc}%`;
-  batteryPercent.textContent = `${soc.toFixed(1)}%`;
-  batteryDetails.innerHTML = `
-    <div><strong>Voltage:</strong> ${Number(battery.voltage_v ?? 0).toFixed(2)} V</div>
-    <div><strong>Current:</strong> ${Number(battery.current_a ?? 0).toFixed(2)} A</div>
-    <div><strong>Average:</strong> ${Number(battery.average_voltage_v ?? 0).toFixed(2)} V</div>
-  `;
-
-  if (soc >= 50) {
-    batteryPill.textContent = "Good";
-    batteryPill.className = "pill pill-good";
-  } else if (soc >= 20) {
-    batteryPill.textContent = "Low";
-    batteryPill.className = "pill pill-warn";
-  } else {
-    batteryPill.textContent = "Critical";
-    batteryPill.className = "pill pill-bad";
-  }
-}
-
-async function refreshBattery() {
-  const response = await fetch("/battery");
-  const data = await response.json();
-  renderBattery(data.battery || {});
-}
-
-async function refreshSpeechDebug() {
-  const response = await fetch("/health");
-  const data = await response.json();
-  isDevMode = Boolean(data?.wrapper?.dev_mode);
-  const speech = data?.wrapper?.speech_debug || {};
-  const heard = typeof speech.last_heard === "string" ? speech.last_heard.trim() : "";
-  const spoken = typeof speech.last_spoken === "string" ? speech.last_spoken.trim() : "";
-  const openAiVision =
-    typeof speech.last_openai_vision === "string" ? speech.last_openai_vision.trim() : "";
-  const openAiError =
-    typeof speech.last_openai_error === "string" ? speech.last_openai_error.trim() : "";
-
-  if (heard && heard !== lastHeardText) {
-    lastHeardText = heard;
-    appendDebug("Robot heard", heard);
-  }
-
-  if (spoken && spoken !== lastSpokenText) {
-    lastSpokenText = spoken;
-    appendDebug("Robot said", spoken);
-  }
-
-  if (openAiVision && openAiVision !== lastOpenAiVisionText) {
-    lastOpenAiVisionText = openAiVision;
-    setVisionSummary(openAiVision, false);
-  }
-
-  if (openAiError && openAiError !== lastOpenAiErrorText) {
-    lastOpenAiErrorText = openAiError;
-    setVisionSummary(`Vision error: ${openAiError}`, true);
-  }
-
-  if (!openAiVision && !openAiError && !visionSummary.textContent.trim()) {
-    setVisionSummary("No image description yet.");
-  }
-}
-
-async function refreshRobotMode() {
-  const response = await fetch("/robot/mode");
-  const data = await response.json();
-  if (!data.ok) {
-    appendDebug("/robot/mode response", data);
-    modeSelect.disabled = true;
-    setModeNote("Robot mode is unavailable.");
-    return;
-  }
-  renderModeOptions(data);
-}
-
-async function refreshVisualContext() {
-  const response = await fetch("/vision/refresh", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: "{}",
-  });
-  const data = await response.json();
-  if (!data.ok) {
-    appendDebug("Vision refresh error", data);
-  }
-  await refreshSpeechDebug();
-  return data;
-}
-
 async function postJson(path, payload) {
   const response = await fetch(path, {
     method: "POST",
@@ -237,6 +113,30 @@ async function postJson(path, payload) {
   const data = await response.json();
   appendDebug(`${path} response`, data);
   return data;
+}
+
+async function refreshSpeechDebug() {
+  const response = await fetch("/health");
+  const data = await response.json();
+  const speech = data?.wrapper?.speech_debug || {};
+  const heard = typeof speech.last_heard === "string" ? speech.last_heard.trim() : "";
+  const spoken = typeof speech.last_spoken === "string" ? speech.last_spoken.trim() : "";
+
+  if (heard && heard !== lastHeardText) {
+    lastHeardText = heard;
+    appendDebug("Robot heard", heard);
+  }
+
+  if (spoken && spoken !== lastSpokenText) {
+    lastSpokenText = spoken;
+    appendDebug("Robot said", spoken);
+  }
+}
+
+async function refreshBattery() {
+  const response = await fetch("/battery");
+  const data = await response.json();
+  renderBattery(data.battery || {});
 }
 
 async function refreshVolume() {
@@ -264,33 +164,19 @@ function stopVideoPreview() {
     window.clearInterval(videoRefreshTimer);
     videoRefreshTimer = null;
   }
-  if (visionRefreshTimer) {
-    window.clearInterval(visionRefreshTimer);
-    visionRefreshTimer = null;
-  }
   videoPreview.removeAttribute("src");
   videoStatus.textContent = "Off";
   setVideoPreviewState(false, "Video preview is off.");
 }
 
 function startVideoPreview() {
-  if (!videoRefreshTimer) {
-    videoStatus.textContent = "Connecting...";
-    setVideoPreviewState(false, "Waiting for robot camera preview...");
-    refreshVideoPreview();
-    videoRefreshTimer = window.setInterval(refreshVideoPreview, 1200);
+  if (videoRefreshTimer) {
+    return;
   }
-
-  if (!visionRefreshTimer) {
-    refreshVisualContext().catch((error) => {
-      appendDebug("Vision refresh error", String(error));
-    });
-    visionRefreshTimer = window.setInterval(() => {
-      refreshVisualContext().catch((error) => {
-        appendDebug("Vision refresh error", String(error));
-      });
-    }, 6000);
-  }
+  videoStatus.textContent = "Connecting...";
+  setVideoPreviewState(false, "Waiting for robot camera preview...");
+  refreshVideoPreview();
+  videoRefreshTimer = window.setInterval(refreshVideoPreview, 1200);
 }
 
 videoPreview.addEventListener("load", () => {
@@ -303,21 +189,10 @@ videoPreview.addEventListener("error", () => {
   setVideoPreviewState(false, "Robot camera preview is not ready.");
 });
 
-document.getElementById("refresh-battery").addEventListener("click", () => {
-  refreshBattery().catch((error) => {
-    console.error("Refresh error", error);
-  });
-});
-
 document.getElementById("start-tts").addEventListener("click", async () => {
   const payload = {
     interrupt_speech_duration: defaultInterruptSpeechDurationMs,
-    mode: "conversation",
-    video_enabled: enableVideo.checked,
   };
-  if (defaultVoiceType) {
-    payload.voice_type = defaultVoiceType;
-  }
   appendDebug("/rtc/tts/start request", payload);
   try {
     await postJson("/rtc/tts/start", payload);
@@ -326,91 +201,13 @@ document.getElementById("start-tts").addEventListener("click", async () => {
   }
 });
 
-document.getElementById("start-asr-only").addEventListener("click", async () => {
-  const payload = {
-    mode: "asr_only",
-  };
-  appendDebug("/rtc/tts/start request", payload);
-  try {
-    await postJson("/rtc/tts/start", payload);
-  } catch (error) {
-    appendDebug("Start ASR-only error", String(error));
-  }
-});
-
-document.getElementById("speak-tts").addEventListener("click", () => {
-  const payload = {
-    text: ttsText.value.trim(),
-    video_enabled: enableVideo.checked,
-  };
-  appendDebug("/rtc/tts/speak request", payload);
-
-  if (!payload.text) {
-    appendDebug("Speak TTS error", "Please enter text before speaking.");
-    return;
-  }
-
-  postJson("/rtc/tts/speak", payload).catch((error) => {
-    appendDebug("Speak TTS error", String(error));
-  });
-});
-
 document.getElementById("stop-tts").addEventListener("click", async () => {
-  try {
-    const conversationPayload = { mode: "conversation" };
-    appendDebug("/rtc/tts/stop request", conversationPayload);
-    await postJson("/rtc/tts/stop", conversationPayload);
-
-    const asrOnlyPayload = { mode: "asr_only" };
-    appendDebug("/rtc/tts/stop request", asrOnlyPayload);
-    await postJson("/rtc/tts/stop", asrOnlyPayload);
-  } catch (error) {
-    appendDebug("Stop TTS error", String(error));
-  }
-});
-
-document.getElementById("wave-hand").addEventListener("click", async () => {
   const payload = {};
-  appendDebug("/robot/wave-hand request", payload);
+  appendDebug("/rtc/tts/stop request", payload);
   try {
-    await postJson("/robot/wave-hand", payload);
+    await postJson("/rtc/tts/stop", payload);
   } catch (error) {
-    appendDebug("Wave hand error", String(error));
-  }
-});
-
-modeSelect.addEventListener("change", async () => {
-  const previousMode = currentMode;
-  const payload = { mode: modeSelect.value };
-  const selectedOption = modeSelect.options[modeSelect.selectedIndex];
-  const selectedLabel = selectedOption?.textContent || payload.mode;
-
-  if (payload.mode !== previousMode) {
-    const confirmed = window.confirm(`Switch robot mode to ${selectedLabel}?`);
-    if (!confirmed) {
-      modeSelect.value = previousMode;
-      return;
-    }
-  }
-
-  appendDebug("/robot/mode request", payload);
-
-  try {
-    modeSelect.disabled = true;
-    setModeNote("Updating mode...");
-    const data = await postJson("/robot/mode", payload);
-    if (data.ok) {
-      renderModeOptions(data);
-    } else {
-      setModeNote("Unable to update mode.");
-      await refreshRobotMode();
-    }
-  } catch (error) {
-    appendDebug("Mode change error", String(error));
-    setModeNote("Unable to update mode.");
-    await refreshRobotMode();
-  } finally {
-    modeSelect.disabled = false;
+    appendDebug("Stop listening error", String(error));
   }
 });
 
@@ -454,26 +251,15 @@ volumeSlider.addEventListener("input", () => {
 
 setInterval(() => {
   refreshBattery().catch((error) => {
-    console.error("Refresh error", error);
+    console.error("Battery error", error);
   });
-
-  refreshRobotMode().catch((error) => {
-    console.error("Robot mode error", error);
-  });
-}, 5000);
-
-setInterval(() => {
   refreshSpeechDebug().catch((error) => {
     console.error("Speech debug error", error);
   });
 }, 1000);
 
 refreshBattery().catch((error) => {
-  console.error("Initial refresh error", error);
-});
-
-refreshRobotMode().catch((error) => {
-  appendDebug("Initial robot mode error", String(error));
+  appendDebug("Initial battery error", String(error));
 });
 
 refreshVolume().catch((error) => {
@@ -486,5 +272,4 @@ refreshSpeechDebug().catch((error) => {
 
 setVideoPreviewState(false);
 videoStatus.textContent = "Off";
-setVisionSummary("No image description yet.");
 setCopyButtonState("Copy Log");

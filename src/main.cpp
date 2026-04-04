@@ -49,9 +49,6 @@ constexpr char kDefaultNetworkInterface[] = "lo";
 constexpr char kDefaultVoiceType[] = "zh_female_shuangkuaisisi_emo_v2_mars_bigtts";
 constexpr char kRosSetupScript[] = "/home/booster/Workspace/booster_robotics_sdk_ros2/install/setup.bash";
 constexpr char kRosTtsHelper[] = "scripts/ros_rtc_tts.py";
-constexpr char kOpenAiVisionHelper[] = "scripts/openai_vision.py";
-constexpr char kOpenAiRealtimeCallHelper[] = "scripts/openai_realtime_call.py";
-constexpr char kOpenAiTextHelper[] = "scripts/openai_text_chat.py";
 constexpr int kDefaultInterruptSpeechDurationMs = 700;
 
 #if BOOSTER_DEV_MODE
@@ -201,62 +198,6 @@ json ParseOptionalJsonBody(const std::string &body) {
         return json::object();
     }
     return json::parse(body);
-}
-
-json BuildOpenAiRealtimeSessionConfig() {
-    const std::string model =
-        Trim(std::getenv("BOOSTER_OPENAI_REALTIME_MODEL") ? std::getenv("BOOSTER_OPENAI_REALTIME_MODEL") : "");
-    const std::string voice =
-        Trim(std::getenv("BOOSTER_OPENAI_REALTIME_VOICE") ? std::getenv("BOOSTER_OPENAI_REALTIME_VOICE") : "");
-    const std::string instructions =
-        Trim(std::getenv("BOOSTER_OPENAI_REALTIME_INSTRUCTIONS") ? std::getenv("BOOSTER_OPENAI_REALTIME_INSTRUCTIONS")
-                                                                 : "");
-
-    return {
-        {"type", "realtime"},
-        {"model", model.empty() ? "gpt-realtime" : model},
-        {"output_modalities", {"audio"}},
-        {"instructions",
-         instructions.empty()
-             ? "You are Booster. Reply in one short sentence by default. Be direct, helpful, and fast. Do not use tools unless explicitly asked."
-             : instructions},
-        {"audio", {
-            {"input", {
-                {"turn_detection", {
-                    {"type", "server_vad"},
-                    {"threshold", 0.5},
-                    {"prefix_padding_ms", 200},
-                    {"silence_duration_ms", 350},
-                    {"create_response", true},
-                    {"interrupt_response", true},
-                }},
-            }},
-            {"output", {
-                {"voice", voice.empty() ? "verse" : voice},
-            }},
-        }},
-    };
-}
-
-bool HasAnyOpenAiApiKey() {
-    return (std::getenv("CHATGPT_API_KEY") && *std::getenv("CHATGPT_API_KEY")) ||
-           (std::getenv("OPENAI_API_KEY") && *std::getenv("OPENAI_API_KEY")) ||
-           (std::getenv("CHAT_GPT_API") && *std::getenv("CHAT_GPT_API")) ||
-           (std::getenv("API_KEY") && *std::getenv("API_KEY"));
-}
-
-json BuildOpenAiTextConfig() {
-    const std::string model =
-        Trim(std::getenv("BOOSTER_OPENAI_TEXT_MODEL") ? std::getenv("BOOSTER_OPENAI_TEXT_MODEL") : "");
-    const std::string system_prompt =
-        Trim(std::getenv("BOOSTER_OPENAI_TEXT_SYSTEM_PROMPT") ? std::getenv("BOOSTER_OPENAI_TEXT_SYSTEM_PROMPT") : "");
-    return {
-        {"model", model.empty() ? "gpt-4.1-mini" : model},
-        {"system_prompt",
-         system_prompt.empty()
-             ? "You are Booster. Reply clearly and briefly. Prefer one or two short paragraphs unless the user asks for detail."
-             : system_prompt},
-    };
 }
 
 std::string ShellEscape(const std::string &value) {
@@ -464,8 +405,6 @@ public:
         battery_monitor_ = std::make_unique<BatteryMonitor>();
 #else
         booster::robot::ChannelFactory::Instance()->Init(domain_id_, network_interface_);
-        loco_client_ = std::make_unique<booster::robot::b1::B1LocoClient>();
-        loco_client_->Init();
         battery_monitor_ = std::make_unique<BatteryMonitor>();
         asr_monitor_ = std::make_unique<booster::robot::ChannelSubscriber<booster_interface::msg::Subtitle>>(
             booster::robot::kTopicAiSubtitle,
@@ -476,165 +415,22 @@ public:
                 }
             });
         asr_monitor_->InitChannel();
-        robot_state_monitor_ = std::make_unique<booster::robot::ChannelSubscriber<booster_interface::msg::RobotStatesMsg>>(
-            booster::robot::b1::kTopicRobotStates,
-            [this](const void *msg) {
-                const auto *state = static_cast<const booster_interface::msg::RobotStatesMsg *>(msg);
-                if (state) {
-                    HandleRobotState(*state);
-                }
-            });
-        robot_state_monitor_->InitChannel();
 #endif
     }
 
     json StatusJson() const {
-        std::scoped_lock lock(speech_mutex_, robot_mode_mutex_);
+        std::scoped_lock lock(speech_mutex_);
         return {
             {"network_interface", network_interface_},
             {"domain_id", domain_id_},
             {"dev_mode", static_cast<bool>(BOOSTER_DEV_MODE)},
             {"battery", battery_monitor_ ? battery_monitor_->ToJson() : json::object()},
             {"tts_transport", BOOSTER_DEV_MODE ? "mock" : "ros_rtc_service"},
-            {"robot_mode", {
-                {"current", RobotModeStateJson(current_robot_mode_)},
-                {"options", RobotModeOptionsJson()},
-            }},
-            {"openai_realtime", OpenAiRealtimeStatusJson()},
-            {"openai_text", OpenAiTextStatusJson()},
             {"speech_debug", {
                 {"last_heard", last_heard_text_},
                 {"last_spoken", last_spoken_text_},
-                {"last_openai_vision", last_openai_vision_text_},
-                {"last_openai_error", last_openai_error_},
             }},
         };
-    }
-
-    json RefreshVisualContext() const {
-        std::scoped_lock vision_lock(vision_mutex_);
-        json vision = AnalyzeCurrentImageWithOpenAi();
-        if (vision.value("ok", false)) {
-            const std::string answer = Trim(vision.value("answer", std::string()));
-            {
-                std::scoped_lock lock(speech_mutex_);
-                last_openai_vision_text_ = answer;
-                last_openai_error_.clear();
-            }
-        } else {
-            const std::string error_summary =
-                Trim(vision.value("error", std::string()) + " " + vision.value("response_body", std::string()));
-            std::scoped_lock lock(speech_mutex_);
-            last_openai_vision_text_.clear();
-            last_openai_error_ = error_summary;
-        }
-        vision["action"] = "refresh_visual_context";
-        return vision;
-    }
-
-    json OpenAiRealtimeStatusJson() const {
-        const json session = BuildOpenAiRealtimeSessionConfig();
-        return {
-            {"available", HasAnyOpenAiApiKey()},
-            {"model", session.value("model", "gpt-realtime")},
-            {"voice", session.value("audio", json::object()).value("output", json::object()).value("voice", "verse")},
-        };
-    }
-
-    json OpenAiTextStatusJson() const {
-        const json config = BuildOpenAiTextConfig();
-        return {
-            {"available", HasAnyOpenAiApiKey()},
-            {"model", config.value("model", "gpt-4.1-mini")},
-        };
-    }
-
-    json CreateOpenAiRealtimeCall(const std::string &offer_sdp) const {
-        const auto sdp = Trim(offer_sdp);
-        if (sdp.empty()) {
-            return {
-                {"ok", false},
-                {"code", 400},
-                {"error", "Missing SDP offer"},
-            };
-        }
-
-        const auto sdp_path =
-            std::filesystem::temp_directory_path() / ("booster_realtime_offer_" + std::to_string(getpid()) + ".sdp");
-        try {
-            {
-                std::ofstream output(sdp_path, std::ios::binary);
-                if (!output) {
-                    throw std::runtime_error("Failed to create temporary SDP file");
-                }
-                output << offer_sdp;
-            }
-
-            const std::string command =
-                "python3 " +
-                ShellEscape(ResolveScriptPath("BOOSTER_OPENAI_REALTIME_HELPER", kOpenAiRealtimeCallHelper)) + " " +
-                ShellEscape(BuildOpenAiRealtimeSessionConfig().dump()) + " " + ShellEscape(sdp_path.string());
-
-            int status = 0;
-            const auto output = RunCommand(command, &status);
-            std::filesystem::remove(sdp_path);
-
-            json result = ParseJsonOrRawString(output);
-            if (!result.is_object()) {
-                return {
-                    {"ok", false},
-                    {"code", status},
-                    {"error", "Unexpected OpenAI Realtime helper output"},
-                    {"raw_output", Trim(output)},
-                };
-            }
-
-            result["helper_exit_status"] = status;
-            if (!result.contains("ok")) {
-                result["ok"] = status == 0;
-            }
-            return result;
-        } catch (const std::exception &e) {
-            std::filesystem::remove(sdp_path);
-            return {
-                {"ok", false},
-                {"code", 500},
-                {"error", e.what()},
-            };
-        }
-    }
-
-    json RespondWithOpenAiText(const std::string &text) const {
-        const auto prompt = Trim(text);
-        if (prompt.empty()) {
-            return {
-                {"ok", false},
-                {"code", 400},
-                {"error", "Missing text"},
-            };
-        }
-
-        const std::string command =
-            "python3 " + ShellEscape(ResolveScriptPath("BOOSTER_OPENAI_TEXT_HELPER", kOpenAiTextHelper)) + " " +
-            ShellEscape(BuildOpenAiTextConfig().dump()) + " " + ShellEscape(json({{"text", prompt}}).dump());
-
-        int status = 0;
-        const auto output = RunCommand(command, &status);
-        json result = ParseJsonOrRawString(output);
-        if (!result.is_object()) {
-            return {
-                {"ok", false},
-                {"code", status},
-                {"error", "Unexpected OpenAI text helper output"},
-                {"raw_output", Trim(output)},
-            };
-        }
-
-        result["helper_exit_status"] = status;
-        if (!result.contains("ok")) {
-            result["ok"] = status == 0;
-        }
-        return result;
     }
 
     json StartTts(const std::string &voice_type,
@@ -680,109 +476,6 @@ public:
         };
 #else
         return RunRosTtsHelper("stop", json::object());
-#endif
-    }
-
-    json SpeakTts(const std::string &text) const {
-        {
-            std::scoped_lock lock(speech_mutex_);
-            last_spoken_text_ = text;
-        }
-#if BOOSTER_DEV_MODE
-        return {
-            {"ok", true},
-            {"action", "speak"},
-            {"text", text},
-            {"dev_mode", true},
-            {"note", "Speech is not played in dev mode."},
-        };
-#else
-        return RunRosTtsHelper("speak", {{"text", text}});
-#endif
-    }
-
-    json RobotModeJson() const {
-        std::scoped_lock lock(robot_mode_mutex_);
-        return {
-            {"ok", true},
-            {"current_mode", RobotModeStateJson(current_robot_mode_)},
-            {"modes", RobotModeOptionsJson()},
-        };
-    }
-
-    json SetRobotMode(const std::string &mode) {
-        const std::string trimmed = Trim(mode);
-        const auto *option = FindRobotModeById(trimmed);
-        if (!option) {
-            return {
-                {"ok", false},
-                {"error", "Unsupported mode"},
-                {"requested_mode", trimmed},
-                {"modes", RobotModeOptionsJson()},
-            };
-        }
-
-#if BOOSTER_DEV_MODE
-        {
-            std::scoped_lock lock(robot_mode_mutex_);
-            current_robot_mode_ = option->value;
-        }
-        return {
-            {"ok", true},
-            {"current_mode", CurrentRobotModeJson()},
-            {"modes", RobotModeOptionsJson()},
-            {"dev_mode", true},
-            {"note", "Robot mode changes are mocked in dev mode."},
-        };
-#else
-        const int32_t status = loco_client_->ChangeMode(option->value);
-        if (status != 0) {
-            return {
-                {"ok", false},
-                {"error", "Failed to change robot mode"},
-                {"code", status},
-                {"requested_mode", trimmed},
-                {"current_mode", CurrentRobotModeJson()},
-                {"modes", RobotModeOptionsJson()},
-            };
-        }
-
-        {
-            std::scoped_lock lock(robot_mode_mutex_);
-            current_robot_mode_ = option->value;
-        }
-        return {
-            {"ok", true},
-            {"current_mode", CurrentRobotModeJson()},
-            {"modes", RobotModeOptionsJson()},
-        };
-#endif
-    }
-
-    json WaveHand() const {
-#if BOOSTER_DEV_MODE
-        return {
-            {"ok", true},
-            {"action", "wave_hand"},
-            {"hand", "right"},
-            {"dev_mode", true},
-            {"note", "Wave hand is mocked in dev mode."},
-        };
-#else
-        const int32_t status = loco_client_->WaveHand(booster::robot::b1::HandAction::kHandOpen);
-        if (status != 0) {
-            return {
-                {"ok", false},
-                {"error", "Failed to wave hand"},
-                {"code", status},
-            };
-        }
-
-        return {
-            {"ok", true},
-            {"action", "wave_hand"},
-            {"hand", "right"},
-        };
 #endif
     }
 
@@ -852,17 +545,7 @@ public:
     }
 
 private:
-    json CurrentRobotModeJson() const {
-        std::scoped_lock lock(robot_mode_mutex_);
-        return RobotModeStateJson(current_robot_mode_);
-    }
-
 #if !BOOSTER_DEV_MODE
-    void HandleRobotState(const booster_interface::msg::RobotStatesMsg &state) {
-        std::scoped_lock lock(robot_mode_mutex_);
-        current_robot_mode_ = static_cast<RobotMode>(state.current_mode());
-    }
-
     void HandleSubtitle(const booster_interface::msg::Subtitle &subtitle) {
         const auto text = Trim(subtitle.text());
         if (text.empty()) {
@@ -882,33 +565,6 @@ private:
         }
     }
 #endif
-
-    json AnalyzeCurrentImageWithOpenAi() const {
-        const std::string prompt =
-            "The robot was asked 'what do you see?'. Reply in exactly 1 or 2 short spoken sentences. "
-            "Mention only the most important visible people, objects, or activity. If uncertain, say so briefly.";
-        const std::string command =
-            "python3 " +
-            ShellEscape(ResolveScriptPath("BOOSTER_OPENAI_VISION_HELPER", kOpenAiVisionHelper)) + " analyze " +
-            ShellEscape(json({
-                {"prompt", prompt},
-                {"image_path", ResolveCameraPreviewPath()},
-            }).dump());
-
-        int status = 0;
-        const auto output = RunCommand(command, &status);
-        json result = ParseJsonOrRawString(output);
-        if (!result.is_object()) {
-            return {
-                {"ok", false},
-                {"code", status},
-                {"error", "Unexpected OpenAI vision helper output"},
-                {"raw_output", Trim(output)},
-            };
-        }
-        result["helper_exit_status"] = status;
-        return result;
-    }
 
 #if !BOOSTER_DEV_MODE
     json RunRosTtsHelper(const std::string &action, const json &payload) const {
@@ -963,20 +619,13 @@ private:
     std::string network_interface_;
     int domain_id_;
 #if !BOOSTER_DEV_MODE
-    std::unique_ptr<booster::robot::b1::B1LocoClient> loco_client_;
     std::unique_ptr<booster::robot::ChannelSubscriber<booster_interface::msg::Subtitle>> asr_monitor_;
-    std::unique_ptr<booster::robot::ChannelSubscriber<booster_interface::msg::RobotStatesMsg>> robot_state_monitor_;
 #endif
     std::unique_ptr<BatteryMonitor> battery_monitor_;
-    mutable std::mutex vision_mutex_;
     mutable std::mutex speech_mutex_;
-    mutable std::mutex robot_mode_mutex_;
     mutable int volume_percent_ = 100;
     mutable std::string last_heard_text_;
     mutable std::string last_spoken_text_;
-    mutable std::string last_openai_vision_text_;
-    mutable std::string last_openai_error_;
-    RobotMode current_robot_mode_ = kDefaultRobotMode;
 };
 
 RuntimeOptions ParseArgs(int argc, char **argv) {
@@ -1085,18 +734,6 @@ http::response<http::string_body> HandleRequest(
         });
     }
 
-    if (req.method() == http::verb::get && path == "/openai/realtime/config") {
-        const auto result = wrapper.OpenAiRealtimeStatusJson();
-        const auto status = result.value("available", false) ? http::status::ok : http::status::service_unavailable;
-        return JsonResponse(status, result);
-    }
-
-    if (req.method() == http::verb::get && path == "/openai/text/config") {
-        const auto result = wrapper.OpenAiTextStatusJson();
-        const auto status = result.value("available", false) ? http::status::ok : http::status::service_unavailable;
-        return JsonResponse(status, result);
-    }
-
     if (req.method() == http::verb::get && path == "/battery") {
         return JsonResponse(http::status::ok, {
             {"ok", true},
@@ -1106,10 +743,6 @@ http::response<http::string_body> HandleRequest(
 
     if (req.method() == http::verb::get && path == "/audio/volume") {
         return JsonResponse(http::status::ok, wrapper.GetVolume());
-    }
-
-    if (req.method() == http::verb::get && path == "/robot/mode") {
-        return JsonResponse(http::status::ok, wrapper.RobotModeJson());
     }
 
     if (req.method() == http::verb::get && path == "/camera/preview.jpg") {
@@ -1154,84 +787,11 @@ http::response<http::string_body> HandleRequest(
         return JsonResponse(http::status::ok, wrapper.StopTts());
     }
 
-    if (req.method() == http::verb::post && path == "/rtc/tts/speak") {
-        try {
-            const json body = ParseOptionalJsonBody(req.body());
-            const auto text = Trim(body.value("text", std::string()));
-            if (text.empty()) {
-                return JsonResponse(http::status::bad_request, {
-                    {"ok", false},
-                    {"error", "Missing text"},
-                    {"path", path},
-                });
-            }
-            return JsonResponse(http::status::ok, wrapper.SpeakTts(text));
-        } catch (const std::exception &e) {
-            return JsonResponse(http::status::bad_request, {
-                {"ok", false},
-                {"error", e.what()},
-                {"path", path},
-            });
-        }
-    }
-
-    if (req.method() == http::verb::post && path == "/vision/refresh") {
-        return JsonResponse(http::status::ok, wrapper.RefreshVisualContext());
-    }
-
-    if (req.method() == http::verb::post && path == "/openai/realtime/call") {
-        const auto result = wrapper.CreateOpenAiRealtimeCall(req.body());
-        if (!result.value("ok", false)) {
-            return JsonResponse(http::status::bad_gateway, result);
-        }
-        return TextResponse(
-            http::status::ok,
-            result.value("sdp_answer", std::string()),
-            "application/sdp");
-    }
-
-    if (req.method() == http::verb::post && path == "/openai/text/respond") {
-        try {
-            const json body = ParseOptionalJsonBody(req.body());
-            const auto result = wrapper.RespondWithOpenAiText(body.value("text", std::string()));
-            const auto status = result.value("ok", false) ? http::status::ok : http::status::bad_gateway;
-            return JsonResponse(status, result);
-        } catch (const std::exception &e) {
-            return JsonResponse(http::status::bad_request, {
-                {"ok", false},
-                {"error", e.what()},
-                {"path", path},
-            });
-        }
-    }
-
-    if (req.method() == http::verb::post && path == "/robot/wave-hand") {
-        const auto result = wrapper.WaveHand();
-        const auto status = result.value("ok", false) ? http::status::ok : http::status::bad_request;
-        return JsonResponse(status, result);
-    }
-
     if (req.method() == http::verb::post && path == "/audio/volume") {
         try {
             const json body = ParseOptionalJsonBody(req.body());
             const int volume_percent = body.at("volume_percent").get<int>();
             return JsonResponse(http::status::ok, wrapper.SetVolume(volume_percent));
-        } catch (const std::exception &e) {
-            return JsonResponse(http::status::bad_request, {
-                {"ok", false},
-                {"error", e.what()},
-                {"path", path},
-            });
-        }
-    }
-
-    if (req.method() == http::verb::post && path == "/robot/mode") {
-        try {
-            const json body = ParseOptionalJsonBody(req.body());
-            const auto mode = body.at("mode").get<std::string>();
-            const auto result = wrapper.SetRobotMode(mode);
-            const auto status = result.value("ok", false) ? http::status::ok : http::status::bad_request;
-            return JsonResponse(status, result);
         } catch (const std::exception &e) {
             return JsonResponse(http::status::bad_request, {
                 {"ok", false},
