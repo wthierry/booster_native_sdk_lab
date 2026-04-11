@@ -20,8 +20,11 @@ STATE_PATH = os.getenv("BOOSTER_OPENAI_ASR_STATE_PATH", "/tmp/booster_openai_asr
 LOG_PATH = os.getenv("BOOSTER_OPENAI_ASR_LOG_PATH", "/tmp/booster_openai_asr.log")
 MODEL = (os.getenv("BOOSTER_OPENAI_ASR_MODEL", "gpt-4o-mini-transcribe").strip()
          or "gpt-4o-mini-transcribe")
-LANGUAGE = os.getenv("BOOSTER_OPENAI_ASR_LANGUAGE", "").strip()
-PROMPT = os.getenv("BOOSTER_OPENAI_ASR_PROMPT", "").strip()
+LANGUAGE = (os.getenv("BOOSTER_OPENAI_ASR_LANGUAGE", "").strip()
+            or os.getenv("BOOSTER_OPENAI_TRANSCRIBE_LANGUAGE", "").strip()
+            or "en")
+PROMPT = (os.getenv("BOOSTER_OPENAI_ASR_PROMPT", "").strip()
+          or "Transcribe spoken English from a robot microphone. If the audio is only silence, noise, or non-speech, return an empty transcript.")
 API_URL = (os.getenv("BOOSTER_OPENAI_ASR_URL", "https://api.openai.com/v1/audio/transcriptions").strip()
            or "https://api.openai.com/v1/audio/transcriptions")
 SOURCE = os.getenv("BOOSTER_OPENAI_ASR_SOURCE", "").strip()
@@ -31,15 +34,16 @@ API_KEY = (os.getenv("OPENAI_API_KEY", "").strip()
 MIN_SPEECH_SEC = float(os.getenv("BOOSTER_OPENAI_ASR_MIN_SPEECH_SEC", "0.35"))
 MAX_SEGMENT_SEC = float(os.getenv("BOOSTER_OPENAI_ASR_MAX_SEGMENT_SEC", "8.0"))
 SILENCE_HOLD_SEC = float(os.getenv("BOOSTER_OPENAI_ASR_SILENCE_HOLD_SEC", "0.8"))
-RMS_THRESHOLD = int(os.getenv("BOOSTER_OPENAI_ASR_RMS_THRESHOLD", "1100"))
+RMS_THRESHOLD = int(os.getenv("BOOSTER_OPENAI_ASR_RMS_THRESHOLD", "1800"))
 PREROLL_SEC = float(os.getenv("BOOSTER_OPENAI_ASR_PREROLL_SEC", "0.25"))
 TEMPERATURE = os.getenv("BOOSTER_OPENAI_ASR_TEMPERATURE", "").strip()
 START_THRESHOLD = int(os.getenv("BOOSTER_OPENAI_ASR_START_THRESHOLD", str(RMS_THRESHOLD)))
-CONTINUE_THRESHOLD = int(os.getenv("BOOSTER_OPENAI_ASR_CONTINUE_THRESHOLD", str(max(1, RMS_THRESHOLD // 2))))
-SILENCE_FRAMES = int(os.getenv("BOOSTER_OPENAI_ASR_SILENCE_FRAMES", "0"))
-MIN_VOICED_FRAMES = int(os.getenv("BOOSTER_OPENAI_ASR_MIN_VOICED_FRAMES", "0"))
-PREFIX_FRAMES = int(os.getenv("BOOSTER_OPENAI_ASR_PREFIX_FRAMES", "0"))
-MAX_FRAMES = int(os.getenv("BOOSTER_OPENAI_ASR_MAX_FRAMES", "0"))
+CONTINUE_THRESHOLD = int(os.getenv("BOOSTER_OPENAI_ASR_CONTINUE_THRESHOLD", "700"))
+SILENCE_FRAMES = int(os.getenv("BOOSTER_OPENAI_ASR_SILENCE_FRAMES", "8"))
+MIN_VOICED_FRAMES = int(os.getenv("BOOSTER_OPENAI_ASR_MIN_VOICED_FRAMES", "4"))
+PREFIX_FRAMES = int(os.getenv("BOOSTER_OPENAI_ASR_PREFIX_FRAMES", "4"))
+MAX_FRAMES = int(os.getenv("BOOSTER_OPENAI_ASR_MAX_FRAMES", "90"))
+START_FRAMES = int(os.getenv("BOOSTER_OPENAI_ASR_START_FRAMES", "3"))
 
 RUNNING = True
 
@@ -50,6 +54,15 @@ def iso_now():
 
 def trim(value):
     return str(value or "").strip()
+
+
+def should_drop_transcript(text):
+    lowered_language = LANGUAGE.lower()
+    if not lowered_language.startswith("en"):
+        return False
+    has_ascii_alnum = any(ch.isascii() and ch.isalnum() for ch in text)
+    has_non_ascii = any(not ch.isascii() for ch in text)
+    return has_non_ascii and not has_ascii_alnum
 
 
 def write_state(payload):
@@ -150,8 +163,6 @@ def transcribe_file(path):
 
     payload = json.loads(proc.stdout)
     text = trim(payload.get("text"))
-    if not text:
-        raise RuntimeError("OpenAI transcription response did not contain text")
     return text
 
 
@@ -185,6 +196,7 @@ def main():
         "start_threshold": START_THRESHOLD,
         "continue_threshold": CONTINUE_THRESHOLD,
         "api_url": API_URL,
+        "start_frames": START_FRAMES,
     }
     write_state(state)
 
@@ -218,6 +230,7 @@ def main():
         max_segment_bytes = MAX_FRAMES * FRAME_BYTES
     preroll = bytearray()
     speaking = False
+    start_frames = 0
     silence_frames = 0
     voiced_frames = 0
     segment = bytearray()
@@ -247,13 +260,18 @@ def main():
 
             start_voiced = rms >= START_THRESHOLD
             continue_voiced = rms >= CONTINUE_THRESHOLD
-            if start_voiced and not speaking:
+            if not speaking and start_voiced:
+                start_frames += 1
+            elif not speaking:
+                start_frames = 0
+
+            if not speaking and start_frames >= max(1, START_FRAMES):
                 speaking = True
                 silence_frames = 0
-                voiced_frames = 1
+                voiced_frames = start_frames
                 segment = bytearray(preroll)
                 set_state_field(state, state="hearing", last_error="")
-                log_line(f"speech started rms={rms}")
+                log_line(f"speech started rms={rms} start_frames={start_frames}")
             elif speaking:
                 segment.extend(chunk)
                 if continue_voiced:
@@ -285,6 +303,24 @@ def main():
                         write_wav(temp_path, [bytes(segment)])
                         log_line(f"transcribing bytes={len(segment)} rms={rms}")
                         transcript = transcribe_file(temp_path)
+                        if not transcript:
+                            log_line("dropped empty transcript")
+                            set_state_field(state, state="listening", last_error="")
+                            speaking = False
+                            start_frames = 0
+                            silence_frames = 0
+                            voiced_frames = 0
+                            segment = bytearray()
+                            continue
+                        if should_drop_transcript(transcript):
+                            log_line(f"dropped non-english transcript: {transcript}")
+                            set_state_field(state, state="listening", last_error="")
+                            speaking = False
+                            start_frames = 0
+                            silence_frames = 0
+                            voiced_frames = 0
+                            segment = bytearray()
+                            continue
                         log_line(f"heard: {transcript}")
                         set_state_field(
                             state,
@@ -302,6 +338,7 @@ def main():
                         except OSError:
                             pass
                     speaking = False
+                    start_frames = 0
                     silence_frames = 0
                     voiced_frames = 0
                     segment = bytearray()

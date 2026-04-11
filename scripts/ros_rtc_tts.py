@@ -7,7 +7,7 @@ import subprocess
 import sys
 
 
-WELCOME_MSG = "Hello, I am booster robot"
+WELCOME_MSG = "Hi"
 SYSTEM_PROMPT = """
 ## prompt
 You're a robot named Booster that offers emotional chatting to users with a dry, sarcastic sense of humor.
@@ -47,7 +47,7 @@ def resolve_voice_type(payload):
     configured = os.getenv("BOOSTER_RTC_VOICE_TYPE", "").strip()
     if configured:
         return configured
-    return "en_female_product_darcie_moon_bigtts"
+    return "zh_male_wennuanahu_moon_bigtts"
 
 
 def parse_response(output):

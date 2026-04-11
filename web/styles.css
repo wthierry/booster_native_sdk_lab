@@ -156,6 +156,14 @@ h1 {
   line-height: 1.5;
 }
 
+.backend-panel .volume-panel {
+  margin-top: 12px;
+}
+
+[hidden] {
+  display: none !important;
+}
+
 .battery-card {
   display: grid;
   grid-template-columns: 120px 1fr;

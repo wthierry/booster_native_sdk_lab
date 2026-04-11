@@ -24,6 +24,7 @@
 #include <cstdlib>
 #include <cctype>
 #include <filesystem>
+#include <fcntl.h>
 #include <fstream>
 #include <iostream>
 #include <mutex>
@@ -31,6 +32,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <sys/wait.h>
 #include <thread>
 #include <vector>
 #include <unistd.h>
@@ -66,6 +68,7 @@ constexpr char kMoonshineAsrDebugLogPath[] = "/tmp/booster_moonshine_asr_debug.l
 constexpr char kMoonshineAsrInputWavPath[] = "/tmp/booster_moonshine_asr_input.wav";
 constexpr char kOpenAiAsrStatePath[] = "/tmp/booster_openai_asr_state.json";
 constexpr char kOpenAiAsrLogPath[] = "/tmp/booster_openai_asr.log";
+constexpr char kFakeBytedanceOpenAiLogPath[] = "/var/log/fake_bytedance_openai_asr.log";
 
 #if BOOSTER_DEV_MODE
 constexpr char kDefaultCameraPreviewPath[] = "tmp/booster_camera_preview.jpg";
@@ -107,6 +110,8 @@ struct RuntimeOptions {
     std::string network_interface = kDefaultNetworkInterface;
     std::string web_root = "web";
 };
+
+json ParseJsonOrRawString(const std::string &body);
 
 std::string Trim(std::string value) {
     while (!value.empty() &&
@@ -177,6 +182,25 @@ json ReadTailLinesIfPresent(const std::string &path, std::size_t max_lines) {
         result.push_back(lines[i]);
     }
     return result;
+}
+
+std::string ExtractQuotedSuffix(const std::string &line, const std::string &marker) {
+    const auto marker_pos = line.find(marker);
+    if (marker_pos == std::string::npos) {
+        return {};
+    }
+    const auto start = line.find('"', marker_pos + marker.size());
+    const auto end = line.rfind('"');
+    if (start == std::string::npos || end == std::string::npos || end <= start) {
+        return {};
+    }
+
+    const auto quoted = line.substr(start, end - start + 1);
+    const auto parsed = ParseJsonOrRawString(quoted);
+    if (parsed.is_string()) {
+        return parsed.get<std::string>();
+    }
+    return {};
 }
 
 void SetEnvVar(const std::string &key, const std::string &value) {
@@ -296,6 +320,75 @@ std::string RunCommand(const std::string &command, int *exit_status = nullptr) {
         *exit_status = status;
     }
     return output;
+}
+
+int LaunchDetachedProcess(
+    const std::vector<std::string> &argv,
+    const std::string &log_path,
+    const std::vector<std::pair<std::string, std::string>> &env_updates,
+    int *child_exit_status = nullptr) {
+    if (argv.empty()) {
+        if (child_exit_status) {
+            *child_exit_status = -1;
+        }
+        return -1;
+    }
+
+    const pid_t pid = fork();
+    if (pid < 0) {
+        if (child_exit_status) {
+            *child_exit_status = -1;
+        }
+        return -1;
+    }
+
+    if (pid == 0) {
+        setsid();
+
+        const int log_fd = open(log_path.c_str(), O_CREAT | O_WRONLY | O_APPEND, 0644);
+        if (log_fd >= 0) {
+            dup2(log_fd, STDOUT_FILENO);
+            dup2(log_fd, STDERR_FILENO);
+            close(log_fd);
+        }
+
+        const int null_fd = open("/dev/null", O_RDONLY);
+        if (null_fd >= 0) {
+            dup2(null_fd, STDIN_FILENO);
+            close(null_fd);
+        }
+
+        for (const auto &[key, value] : env_updates) {
+            setenv(key.c_str(), value.c_str(), 1);
+        }
+
+        std::vector<char *> exec_argv;
+        exec_argv.reserve(argv.size() + 1);
+        for (const auto &arg : argv) {
+            exec_argv.push_back(const_cast<char *>(arg.c_str()));
+        }
+        exec_argv.push_back(nullptr);
+
+        execvp(exec_argv[0], exec_argv.data());
+        std::perror("execvp");
+        _exit(127);
+    }
+
+    if (child_exit_status) {
+        *child_exit_status = 0;
+        int status = 0;
+        const pid_t waited = waitpid(pid, &status, WNOHANG);
+        if (waited == pid) {
+            *child_exit_status = status;
+        }
+    }
+    return static_cast<int>(pid);
+}
+
+bool IsSystemServiceActive(const std::string &service_name) {
+    int status = 0;
+    RunCommand("systemctl is-active --quiet " + ShellEscape(service_name), &status);
+    return status == 0;
 }
 
 std::string QuerylessPath(const std::string &target) {
@@ -589,6 +682,7 @@ public:
         const json whisperlive_asr = WhisperLiveAsrStatus();
         const json moonshine_asr = MoonshineAsrStatus();
         const json openai_asr = OpenAiAsrStatus();
+        const json native_openai_bridge = NativeOpenAiBridgeStatus();
         std::scoped_lock lock(speech_mutex_);
         std::string last_heard = last_heard_text_;
         std::string last_spoken = last_spoken_text_;
@@ -651,6 +745,7 @@ public:
                 {"last_heard", last_heard},
                 {"last_spoken", last_spoken},
             }},
+            {"native_openai_bridge", native_openai_bridge},
             {"whisperlive_asr", whisperlive_asr},
             {"moonshine_asr", moonshine_asr},
             {"openai_asr", openai_asr},
@@ -668,6 +763,27 @@ public:
             {"note", "TTS start is mocked in dev mode."},
         };
 #else
+        if (!IsSystemServiceActive("fake-bytedance-openai-asr.service")) {
+            return {
+                {"ok", false},
+                {"action", "start_tts"},
+                {"backend", kBackendRtc},
+                {"code", 503},
+                {"error", "fake-bytedance-openai-asr.service is not running"},
+                {"service_name", "fake-bytedance-openai-asr.service"},
+            };
+        }
+        if (!IsSystemServiceActive("booster-lui.service")) {
+            return {
+                {"ok", false},
+                {"action", "start_tts"},
+                {"backend", kBackendRtc},
+                {"code", 503},
+                {"error", "booster-lui.service is not running"},
+                {"service_name", "booster-lui.service"},
+            };
+        }
+
         json payload = {
             {"interrupt_speech_duration", interrupt_speech_duration_ms},
         };
@@ -885,33 +1001,17 @@ public:
         };
 #else
         const json stop_result = StopOpenAiAsr();
-        const std::string helper_path = ResolveOpenAiAsrHelperPath();
-        const std::string launcher =
-            "import os,subprocess,sys;"
-            "os.environ['BOOSTER_OPENAI_ASR_LOG_PATH']=sys.argv[2];"
-            "os.environ['BOOSTER_OPENAI_ASR_STATE_PATH']=sys.argv[3];"
-            "os.environ['BOOSTER_OPENAI_ASR_MODEL']=sys.argv[4];"
-            "log=open(sys.argv[2],'ab', buffering=0);"
-            "proc=subprocess.Popen(['python3', sys.argv[1]], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True);"
-            "print(proc.pid)";
         const std::string requested_model = model.empty() ? std::string("gpt-4o-mini-transcribe") : model;
-        const std::string command =
-            "python3 -c " + ShellEscape(launcher) + " " + ShellEscape(helper_path) + " " +
-            ShellEscape(kOpenAiAsrLogPath) + " " + ShellEscape(kOpenAiAsrStatePath) + " " +
-            ShellEscape(requested_model);
-
+        const std::vector<std::pair<std::string, std::string>> envs = {
+            {"BOOSTER_OPENAI_ASR_LOG_PATH", kOpenAiAsrLogPath},
+            {"BOOSTER_OPENAI_ASR_STATE_PATH", kOpenAiAsrStatePath},
+            {"BOOSTER_OPENAI_ASR_MODEL", requested_model},
+        };
+        const std::vector<std::string> argv = {"python3", ResolveOpenAiAsrHelperPath()};
         int status = 0;
-        const std::string output = RunCommand("bash -lc " + ShellEscape(command), &status);
-        const std::string pid_text = Trim(output);
-        int spawned_pid = 0;
-        try {
-            if (!pid_text.empty()) {
-                spawned_pid = std::stoi(pid_text);
-            }
-        } catch (...) {
-        }
+        const int spawned_pid = LaunchDetachedProcess(argv, kOpenAiAsrLogPath, envs, &status);
         json result = {
-            {"ok", status == 0 && !pid_text.empty()},
+            {"ok", spawned_pid > 0 && status == 0},
             {"action", "openai_asr_start"},
             {"backend", kBackendOpenAiAsr},
             {"requested_model", requested_model},
@@ -941,54 +1041,52 @@ public:
         };
 #else
         const json stop_result = StopOpenAiAsr();
-        const std::string helper_path = ResolveOpenAiAsrHelperPath();
-        const std::string launcher =
-            "import os,subprocess,sys,json;"
-            "cfg=json.loads(sys.argv[5]);"
-            "os.environ['BOOSTER_OPENAI_ASR_LOG_PATH']=sys.argv[2];"
-            "os.environ['BOOSTER_OPENAI_ASR_STATE_PATH']=sys.argv[3];"
-            "os.environ['BOOSTER_OPENAI_ASR_MODEL']=sys.argv[4];"
-            "mapping={"
-            "'language':'BOOSTER_OPENAI_ASR_LANGUAGE',"
-            "'prompt':'BOOSTER_OPENAI_ASR_PROMPT',"
-            "'sample_rate':'BOOSTER_OPENAI_ASR_SAMPLE_RATE',"
-            "'channels':'BOOSTER_OPENAI_ASR_CHANNELS',"
-            "'frame_samples':'BOOSTER_OPENAI_ASR_FRAME_SAMPLES',"
-            "'rms_threshold':'BOOSTER_OPENAI_ASR_RMS_THRESHOLD',"
-            "'start_threshold':'BOOSTER_OPENAI_ASR_START_THRESHOLD',"
-            "'continue_threshold':'BOOSTER_OPENAI_ASR_CONTINUE_THRESHOLD',"
-            "'silence_frames':'BOOSTER_OPENAI_ASR_SILENCE_FRAMES',"
-            "'min_voiced_frames':'BOOSTER_OPENAI_ASR_MIN_VOICED_FRAMES',"
-            "'prefix_frames':'BOOSTER_OPENAI_ASR_PREFIX_FRAMES',"
-            "'max_frames':'BOOSTER_OPENAI_ASR_MAX_FRAMES'};"
-            "for key, env_name in mapping.items():"
-            " value=cfg.get(key);"
-            " if value is None: continue;"
-            " text=str(value).strip();"
-            " if text=='': continue;"
-            " os.environ[env_name]=text;"
-            "log=open(sys.argv[2],'ab', buffering=0);"
-            "proc=subprocess.Popen(['python3', sys.argv[1]], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True);"
-            "print(proc.pid)";
         const std::string requested_model = Trim(config.value("model", std::string("gpt-4o-mini-transcribe")));
-        const std::string command =
-            "python3 -c " + ShellEscape(launcher) + " " + ShellEscape(helper_path) + " " +
-            ShellEscape(kOpenAiAsrLogPath) + " " + ShellEscape(kOpenAiAsrStatePath) + " " +
-            ShellEscape(requested_model.empty() ? std::string("gpt-4o-mini-transcribe") : requested_model) + " " +
-            ShellEscape(config.dump());
-
-        int status = 0;
-        const std::string output = RunCommand("bash -lc " + ShellEscape(command), &status);
-        const std::string pid_text = Trim(output);
-        int spawned_pid = 0;
-        try {
-            if (!pid_text.empty()) {
-                spawned_pid = std::stoi(pid_text);
+        std::vector<std::pair<std::string, std::string>> envs = {
+            {"BOOSTER_OPENAI_ASR_LOG_PATH", kOpenAiAsrLogPath},
+            {"BOOSTER_OPENAI_ASR_STATE_PATH", kOpenAiAsrStatePath},
+            {"BOOSTER_OPENAI_ASR_MODEL", requested_model.empty() ? std::string("gpt-4o-mini-transcribe") : requested_model},
+        };
+        const std::array<std::pair<const char *, const char *>, 9> mappings{{
+            {"language", "BOOSTER_OPENAI_ASR_LANGUAGE"},
+            {"prompt", "BOOSTER_OPENAI_ASR_PROMPT"},
+            {"sample_rate", "BOOSTER_OPENAI_ASR_SAMPLE_RATE"},
+            {"channels", "BOOSTER_OPENAI_ASR_CHANNELS"},
+            {"frame_samples", "BOOSTER_OPENAI_ASR_FRAME_SAMPLES"},
+            {"rms_threshold", "BOOSTER_OPENAI_ASR_RMS_THRESHOLD"},
+            {"start_threshold", "BOOSTER_OPENAI_ASR_START_THRESHOLD"},
+            {"continue_threshold", "BOOSTER_OPENAI_ASR_CONTINUE_THRESHOLD"},
+            {"silence_frames", "BOOSTER_OPENAI_ASR_SILENCE_FRAMES"},
+        }};
+        for (const auto &[json_key, env_key] : mappings) {
+            if (!config.contains(json_key) || config.at(json_key).is_null()) {
+                continue;
             }
-        } catch (...) {
+            std::string value;
+            if (config.at(json_key).is_string()) {
+                value = Trim(config.at(json_key).get<std::string>());
+            } else {
+                value = Trim(config.at(json_key).dump());
+            }
+            if (value.empty()) {
+                continue;
+            }
+            envs.push_back({env_key, value});
         }
+        if (config.contains("min_voiced_frames") && !config.at("min_voiced_frames").is_null()) {
+            envs.push_back({"BOOSTER_OPENAI_ASR_MIN_VOICED_FRAMES", Trim(config.at("min_voiced_frames").dump())});
+        }
+        if (config.contains("prefix_frames") && !config.at("prefix_frames").is_null()) {
+            envs.push_back({"BOOSTER_OPENAI_ASR_PREFIX_FRAMES", Trim(config.at("prefix_frames").dump())});
+        }
+        if (config.contains("max_frames") && !config.at("max_frames").is_null()) {
+            envs.push_back({"BOOSTER_OPENAI_ASR_MAX_FRAMES", Trim(config.at("max_frames").dump())});
+        }
+        const std::vector<std::string> argv = {"python3", ResolveOpenAiAsrHelperPath()};
+        int status = 0;
+        const int spawned_pid = LaunchDetachedProcess(argv, kOpenAiAsrLogPath, envs, &status);
         json result = {
-            {"ok", status == 0 && !pid_text.empty()},
+            {"ok", spawned_pid > 0 && status == 0},
             {"action", "openai_asr_start"},
             {"backend", kBackendOpenAiAsr},
             {"requested_model", requested_model.empty() ? std::string("gpt-4o-mini-transcribe") : requested_model},
@@ -1195,6 +1293,36 @@ private:
                 status["state"] = "stopped";
             }
         }
+        return status;
+    }
+
+    json NativeOpenAiBridgeStatus() const {
+        json status = {
+            {"available", std::filesystem::exists(kFakeBytedanceOpenAiLogPath)},
+            {"log_path", kFakeBytedanceOpenAiLogPath},
+            {"debug_tail", ReadTailLinesIfPresent(kFakeBytedanceOpenAiLogPath, 20)},
+            {"last_result", ""},
+            {"last_segment", ""},
+        };
+
+        if (!status["debug_tail"].is_array()) {
+            return status;
+        }
+
+        for (auto it = status["debug_tail"].rbegin(); it != status["debug_tail"].rend(); ++it) {
+            const std::string line = it->is_string() ? it->get<std::string>() : std::string();
+            if (status["last_result"].get<std::string>().empty() && line.find("sent_result ") != std::string::npos) {
+                status["last_result"] = ExtractQuotedSuffix(line, "text=");
+            }
+            if (status["last_segment"].get<std::string>().empty() && line.find("segment_done ") != std::string::npos) {
+                status["last_segment"] = ExtractQuotedSuffix(line, "text=");
+            }
+            if (!status["last_result"].get<std::string>().empty() &&
+                !status["last_segment"].get<std::string>().empty()) {
+                break;
+            }
+        }
+
         return status;
     }
 

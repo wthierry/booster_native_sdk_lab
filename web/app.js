@@ -4,6 +4,7 @@ const batteryDetails = document.getElementById("battery-details");
 const batteryPill = document.getElementById("battery-pill");
 const debugWindow = document.getElementById("debug-window");
 const heardWindow = document.getElementById("heard-window");
+const openAiBridgeWindow = document.getElementById("openai-bridge-window");
 const copyDebugButton = document.getElementById("copy-debug");
 const backendOptions = Array.from(document.querySelectorAll('input[name="speech-backend"]'));
 const rtcStartButton = document.getElementById("rtc-start");
@@ -17,6 +18,7 @@ const moonshineModel = document.getElementById("moonshine-model");
 const openAiStartButton = document.getElementById("openai-start");
 const openAiStopButton = document.getElementById("openai-stop");
 const openAiModel = document.getElementById("openai-model");
+const openAiTuningControls = document.getElementById("openai-tuning-controls");
 const openAiStartThreshold = document.getElementById("openai-start-threshold");
 const openAiStartThresholdValue = document.getElementById("openai-start-threshold-value");
 const openAiContinueThreshold = document.getElementById("openai-continue-threshold");
@@ -40,23 +42,22 @@ const videoPlaceholder = document.getElementById("video-placeholder");
 const videoStatus = document.getElementById("video-status");
 const videoFrame = videoPreview.closest(".video-frame");
 
-const defaultInterruptSpeechDurationMs = 700;
 let volumeUpdateTimer = null;
 let copyButtonTimer = null;
 let videoRefreshTimer = null;
 let lastHeardText = "";
-let lastSpokenText = "";
 let lastMoonshineDebugText = "";
+let lastOpenAiBridgeText = "";
 let selectedBackend = "rtc";
 const whisperLiveModelStorageKey = "booster.whisperlive.model";
 const moonshineModelStorageKey = "booster.moonshine.model";
 const openAiModelStorageKey = "booster.openai.model";
 const openAiTuningStorageKey = "booster.openai.tuning";
 const openAiDefaults = {
-  start_threshold: 1100,
-  continue_threshold: 550,
-  silence_frames: 13,
-  max_frames: 125,
+  start_threshold: 1800,
+  continue_threshold: 700,
+  silence_frames: 8,
+  max_frames: 90,
 };
 
 function getOpenAiTuning() {
@@ -101,6 +102,7 @@ function updateBackendControls() {
   openAiStartButton.disabled = !openAiSelected;
   openAiStopButton.disabled = !openAiSelected;
   openAiModel.disabled = !openAiSelected;
+  openAiTuningControls.hidden = !openAiSelected;
   openAiStartThreshold.disabled = !openAiSelected;
   openAiContinueThreshold.disabled = !openAiSelected;
   openAiSilenceFrames.disabled = !openAiSelected;
@@ -243,17 +245,12 @@ async function refreshSpeechDebug() {
   const data = await response.json();
   const speech = data?.wrapper?.speech_debug || {};
   const moonshine = data?.wrapper?.moonshine_asr || {};
+  const nativeOpenAiBridge = data?.wrapper?.native_openai_bridge || {};
   const heard = typeof speech.last_heard === "string" ? speech.last_heard.trim() : "";
-  const spoken = typeof speech.last_spoken === "string" ? speech.last_spoken.trim() : "";
 
   if (heard && heard !== lastHeardText) {
     lastHeardText = heard;
     heardWindow.textContent = heard;
-  }
-
-  if (spoken && spoken !== lastSpokenText) {
-    lastSpokenText = spoken;
-    appendDebug("Robot said", spoken);
   }
 
   if (Array.isArray(moonshine.debug_tail) && moonshine.debug_tail.length > 0) {
@@ -263,6 +260,22 @@ async function refreshSpeechDebug() {
       lastMoonshineDebugText = joined;
       appendDebug("[Moonshine ASR] Debug", joined);
     }
+  }
+
+  const bridgeLines = Array.isArray(nativeOpenAiBridge.debug_tail) ? nativeOpenAiBridge.debug_tail : [];
+  const bridgeResult = typeof nativeOpenAiBridge.last_result === "string" ? nativeOpenAiBridge.last_result.trim() : "";
+  const bridgeSegment = typeof nativeOpenAiBridge.last_segment === "string" ? nativeOpenAiBridge.last_segment.trim() : "";
+  const bridgeText = [
+    bridgeResult ? `Last Result:\n${bridgeResult}` : "",
+    bridgeSegment && bridgeSegment !== bridgeResult ? `Last Segment:\n${bridgeSegment}` : "",
+    bridgeLines.length ? `Recent Log:\n${bridgeLines.join("\n")}` : "",
+  ].filter(Boolean).join("\n\n");
+
+  if (bridgeText && bridgeText !== lastOpenAiBridgeText) {
+    lastOpenAiBridgeText = bridgeText;
+    openAiBridgeWindow.textContent = bridgeText;
+  } else if (!bridgeText && !lastOpenAiBridgeText) {
+    openAiBridgeWindow.textContent = "Waiting for native OpenAI bridge output...";
   }
 }
 
@@ -324,7 +337,7 @@ videoPreview.addEventListener("error", () => {
 
 rtcStartButton.addEventListener("click", async () => {
   const payload = {
-    interrupt_speech_duration: defaultInterruptSpeechDurationMs,
+    interrupt_speech_duration: 700,
   };
   appendDebug("[Native RTC] /rtc/tts/start request", payload);
   try {
@@ -510,6 +523,9 @@ refreshSpeechDebug().catch((error) => {
 
 if (!lastHeardText) {
   heardWindow.textContent = "Waiting for speech...";
+}
+if (!lastOpenAiBridgeText) {
+  openAiBridgeWindow.textContent = "Waiting for native OpenAI bridge output...";
 }
 
 setVideoPreviewState(false);

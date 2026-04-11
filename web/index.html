@@ -124,33 +124,35 @@
                   <option value="gpt-4o-transcribe">gpt-4o-transcribe</option>
                 </select>
               </div>
-              <div class="volume-panel">
-                <div class="volume-head">
-                  <label class="tts-label" for="openai-start-threshold">Start Threshold</label>
-                  <span id="openai-start-threshold-value" class="volume-value">1100</span>
+              <div id="openai-tuning-controls" hidden>
+                <div class="volume-panel">
+                  <div class="volume-head">
+                    <label class="tts-label" for="openai-start-threshold">Start Threshold</label>
+                    <span id="openai-start-threshold-value" class="volume-value">1800</span>
+                  </div>
+                  <input id="openai-start-threshold" class="volume-slider" type="range" min="200" max="4000" step="50" value="1800">
                 </div>
-                <input id="openai-start-threshold" class="volume-slider" type="range" min="200" max="4000" step="50" value="1100">
-              </div>
-              <div class="volume-panel">
-                <div class="volume-head">
-                  <label class="tts-label" for="openai-continue-threshold">Continue Threshold</label>
-                  <span id="openai-continue-threshold-value" class="volume-value">550</span>
+                <div class="volume-panel">
+                  <div class="volume-head">
+                    <label class="tts-label" for="openai-continue-threshold">Continue Threshold</label>
+                    <span id="openai-continue-threshold-value" class="volume-value">700</span>
+                  </div>
+                  <input id="openai-continue-threshold" class="volume-slider" type="range" min="100" max="3000" step="25" value="700">
                 </div>
-                <input id="openai-continue-threshold" class="volume-slider" type="range" min="100" max="3000" step="25" value="550">
-              </div>
-              <div class="volume-panel">
-                <div class="volume-head">
-                  <label class="tts-label" for="openai-silence-frames">Silence Frames</label>
-                  <span id="openai-silence-frames-value" class="volume-value">13</span>
+                <div class="volume-panel">
+                  <div class="volume-head">
+                    <label class="tts-label" for="openai-silence-frames">Silence Frames</label>
+                    <span id="openai-silence-frames-value" class="volume-value">8</span>
+                  </div>
+                  <input id="openai-silence-frames" class="volume-slider" type="range" min="2" max="40" step="1" value="8">
                 </div>
-                <input id="openai-silence-frames" class="volume-slider" type="range" min="2" max="40" step="1" value="13">
-              </div>
-              <div class="volume-panel">
-                <div class="volume-head">
-                  <label class="tts-label" for="openai-max-frames">Max Frames</label>
-                  <span id="openai-max-frames-value" class="volume-value">125</span>
+                <div class="volume-panel">
+                  <div class="volume-head">
+                    <label class="tts-label" for="openai-max-frames">Max Frames</label>
+                    <span id="openai-max-frames-value" class="volume-value">90</span>
+                  </div>
+                  <input id="openai-max-frames" class="volume-slider" type="range" min="20" max="200" step="1" value="90">
                 </div>
-                <input id="openai-max-frames" class="volume-slider" type="range" min="20" max="200" step="1" value="125">
               </div>
               <p id="openai-note" class="backend-note">Select OpenAI ASR to enable cloud transcription using the server-side API key.</p>
             </section>
@@ -204,6 +206,16 @@
                 </div>
               </div>
               <pre id="heard-window" class="debug-window heard-window">Waiting for speech...</pre>
+            </section>
+
+            <section class="debug-panel" aria-labelledby="openai-bridge-title">
+              <div class="debug-head">
+                <div>
+                  <h3 id="openai-bridge-title" class="video-title">OpenAI Bridge</h3>
+                  <p class="video-copy">Latest transcript and bridge events returned by the native OpenAI redirect.</p>
+                </div>
+              </div>
+              <pre id="openai-bridge-window" class="debug-window heard-window">Waiting for native OpenAI bridge output...</pre>
             </section>
 
             <section class="debug-panel" aria-labelledby="debug-title">
