@@ -13,6 +13,20 @@ endif()
 option(BOOSTER_DEV_MODE "Build without robot SDK and Linux runtime dependencies" ${BOOSTER_DEV_MODE_DEFAULT})
 
 set(BOOSTER_SDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../booster_robotics_sdk" CACHE PATH "Path to the Booster native SDK repo")
+set(BOOSTER_MOONSHINE_SOURCE_ROOT "" CACHE PATH "Path to the Moonshine source checkout")
+option(BOOSTER_ENABLE_MOONSHINE_NATIVE "Build the native Moonshine ASR helper when Moonshine source is available" ON)
+
+if(NOT BOOSTER_MOONSHINE_SOURCE_ROOT)
+  foreach(_moonshine_candidate
+      "${CMAKE_CURRENT_SOURCE_DIR}/../moonshine"
+      "${CMAKE_CURRENT_SOURCE_DIR}/../moonshine_check"
+      "/home/booster/Workspace/moonshine_check")
+    if(EXISTS "${_moonshine_candidate}")
+      set(BOOSTER_MOONSHINE_SOURCE_ROOT "${_moonshine_candidate}" CACHE PATH "Path to the Moonshine source checkout" FORCE)
+      break()
+    endif()
+  endforeach()
+endif()
 
 if(APPLE AND EXISTS "/opt/homebrew/opt/boost")
   set(Boost_ROOT "/opt/homebrew/opt/boost")
@@ -55,6 +69,77 @@ endif()
 add_executable(booster_sdk_http_wrapper
   src/main.cpp
 )
+
+set(BOOSTER_MOONSHINE_CORE_DIR "")
+if(BOOSTER_MOONSHINE_SOURCE_ROOT)
+  if(EXISTS "${BOOSTER_MOONSHINE_SOURCE_ROOT}/core/CMakeLists.txt")
+    set(BOOSTER_MOONSHINE_CORE_DIR "${BOOSTER_MOONSHINE_SOURCE_ROOT}/core")
+  elseif(EXISTS "${BOOSTER_MOONSHINE_SOURCE_ROOT}/CMakeLists.txt")
+    set(BOOSTER_MOONSHINE_CORE_DIR "${BOOSTER_MOONSHINE_SOURCE_ROOT}")
+  endif()
+endif()
+
+if(BOOSTER_ENABLE_MOONSHINE_NATIVE AND BOOSTER_MOONSHINE_CORE_DIR)
+  if(UNIX AND NOT APPLE)
+    set(LINUX TRUE)
+  endif()
+  set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+  add_subdirectory("${BOOSTER_MOONSHINE_CORE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/moonshine_core_build" EXCLUDE_FROM_ALL)
+
+  get_target_property(_moonshine_sources moonshine SOURCES)
+  if(_moonshine_sources)
+    list(REMOVE_ITEM _moonshine_sources
+      "speaker-embedding-model-data.cpp"
+      "${BOOSTER_MOONSHINE_CORE_DIR}/speaker-embedding-model-data.cpp"
+    )
+    set_property(TARGET moonshine PROPERTY SOURCES "${_moonshine_sources}")
+  endif()
+  target_sources(moonshine PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/moonshine_speaker_embedding_stub.cpp"
+  )
+
+  add_executable(booster_moonshine_asr_native
+    src/moonshine_asr_daemon.cpp
+  )
+  set_target_properties(booster_moonshine_asr_native PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED YES
+    CXX_EXTENSIONS NO
+  )
+  if(APPLE)
+    set_target_properties(booster_moonshine_asr_native PROPERTIES
+      BUILD_RPATH "@loader_path/moonshine_core_build"
+      INSTALL_RPATH "@loader_path/moonshine_core_build"
+    )
+  elseif(UNIX)
+    set_target_properties(booster_moonshine_asr_native PROPERTIES
+      BUILD_RPATH "$ORIGIN/moonshine_core_build"
+      INSTALL_RPATH "$ORIGIN/moonshine_core_build"
+    )
+  endif()
+  target_include_directories(booster_moonshine_asr_native PRIVATE
+    "${BOOSTER_MOONSHINE_CORE_DIR}"
+  )
+  if(NOT BOOSTER_DEV_MODE)
+    target_include_directories(booster_moonshine_asr_native PRIVATE
+      "${BOOSTER_SDK_INCLUDE_DIR}"
+    )
+  endif()
+  if(TARGET nlohmann_json::nlohmann_json)
+    target_link_libraries(booster_moonshine_asr_native PRIVATE nlohmann_json::nlohmann_json)
+  elseif(EXISTS "/opt/homebrew/include/nlohmann/json.hpp")
+    target_include_directories(booster_moonshine_asr_native PRIVATE /opt/homebrew/include)
+  endif()
+  target_link_libraries(booster_moonshine_asr_native PRIVATE moonshine)
+  if(NOT APPLE)
+    target_link_libraries(booster_moonshine_asr_native PRIVATE pthread)
+  endif()
+
+  target_compile_definitions(booster_sdk_http_wrapper PRIVATE
+    BOOSTER_MOONSHINE_NATIVE_HELPER_PATH="$<TARGET_FILE:booster_moonshine_asr_native>"
+  )
+endif()
 
 if(Boost_INCLUDE_DIRS)
   target_include_directories(booster_sdk_http_wrapper PRIVATE ${Boost_INCLUDE_DIRS})
