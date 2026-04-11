@@ -32,6 +32,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <vector>
 #include <unistd.h>
 
 namespace asio = boost::asio;
@@ -46,15 +47,25 @@ constexpr char kDefaultBindAddress[] = "0.0.0.0";
 constexpr unsigned short kDefaultPort = 8080;
 constexpr int kDefaultDomainId = 0;
 constexpr char kDefaultNetworkInterface[] = "lo";
-constexpr char kDefaultVoiceType[] = "en_female_product_darcie_moon_bigtts";
+constexpr char kDefaultVoiceType[] = "zh_male_wennuanahu_moon_bigtts";
 constexpr char kRosSetupScript[] = "/home/booster/Workspace/booster_robotics_sdk_ros2/install/setup.bash";
 constexpr char kRosTtsHelper[] = "scripts/ros_rtc_tts.py";
 constexpr char kWhisperLiveAsrHelper[] = "scripts/whisperlive_asr_daemon.py";
+constexpr char kMoonshineAsrHelper[] = "scripts/moonshine_asr_daemon.py";
+constexpr char kOpenAiAsrHelper[] = "scripts/openai_asr_daemon.py";
 constexpr int kDefaultInterruptSpeechDurationMs = 700;
 constexpr char kBackendRtc[] = "rtc";
 constexpr char kBackendWhisperLiveAsr[] = "whisperlive_asr";
+constexpr char kBackendMoonshineAsr[] = "moonshine_asr";
+constexpr char kBackendOpenAiAsr[] = "openai_asr";
 constexpr char kWhisperLiveAsrStatePath[] = "/tmp/booster_whisperlive_asr_state.json";
 constexpr char kWhisperLiveAsrLogPath[] = "/tmp/booster_whisperlive_asr.log";
+constexpr char kMoonshineAsrStatePath[] = "/tmp/booster_moonshine_asr_state.json";
+constexpr char kMoonshineAsrLogPath[] = "/tmp/booster_moonshine_asr.log";
+constexpr char kMoonshineAsrDebugLogPath[] = "/tmp/booster_moonshine_asr_debug.log";
+constexpr char kMoonshineAsrInputWavPath[] = "/tmp/booster_moonshine_asr_input.wav";
+constexpr char kOpenAiAsrStatePath[] = "/tmp/booster_openai_asr_state.json";
+constexpr char kOpenAiAsrLogPath[] = "/tmp/booster_openai_asr.log";
 
 #if BOOSTER_DEV_MODE
 constexpr char kDefaultCameraPreviewPath[] = "tmp/booster_camera_preview.jpg";
@@ -146,6 +157,26 @@ json ReadJsonFileIfPresent(const std::string &path) {
     } catch (...) {
     }
     return json::object();
+}
+
+json ReadTailLinesIfPresent(const std::string &path, std::size_t max_lines) {
+    std::ifstream input(path);
+    if (!input) {
+        return json::array();
+    }
+
+    std::vector<std::string> lines;
+    std::string line;
+    while (std::getline(input, line)) {
+        lines.push_back(line);
+    }
+
+    json result = json::array();
+    const std::size_t start = lines.size() > max_lines ? lines.size() - max_lines : 0;
+    for (std::size_t i = start; i < lines.size(); ++i) {
+        result.push_back(lines[i]);
+    }
+    return result;
 }
 
 void SetEnvVar(const std::string &key, const std::string &value) {
@@ -287,6 +318,110 @@ std::string ResolveScriptPath(const char *env_var, const char *relative_path) {
     }
 
     return relative_path;
+}
+
+std::string ResolveMoonshineHelperPath() {
+    if (const char *override_path = std::getenv("BOOSTER_MOONSHINE_ASR_HELPER")) {
+        const std::string configured = Trim(override_path);
+        if (!configured.empty()) {
+            return configured;
+        }
+    }
+
+#ifdef BOOSTER_MOONSHINE_NATIVE_HELPER_PATH
+    const std::filesystem::path native_helper(BOOSTER_MOONSHINE_NATIVE_HELPER_PATH);
+    if (std::filesystem::exists(native_helper)) {
+        return native_helper.string();
+    }
+#endif
+
+    return ResolveScriptPath("BOOSTER_MOONSHINE_ASR_HELPER", kMoonshineAsrHelper);
+}
+
+std::string ResolveOpenAiAsrHelperPath() {
+    return ResolveScriptPath("BOOSTER_OPENAI_ASR_HELPER", kOpenAiAsrHelper);
+}
+
+std::string BuildHelperLaunchTarget(const std::string &helper_path) {
+    const std::filesystem::path helper(helper_path);
+    if (helper.extension() == ".py") {
+        return "python3 " + ShellEscape(helper_path);
+    }
+    return ShellEscape(helper_path);
+}
+
+bool IsProcessRunning(int pid);
+
+std::vector<int> FindProcessesMatching(const std::string &pattern) {
+    std::vector<int> pids;
+    if (pattern.empty()) {
+        return pids;
+    }
+
+    int status = 0;
+    const std::string output = RunCommand("pgrep -f " + ShellEscape(pattern), &status);
+    if (status != 0) {
+        return pids;
+    }
+
+    std::istringstream stream(output);
+    std::string line;
+    while (std::getline(stream, line)) {
+        line = Trim(line);
+        if (line.empty()) {
+            continue;
+        }
+        try {
+            pids.push_back(std::stoi(line));
+        } catch (...) {
+        }
+    }
+    return pids;
+}
+
+void AppendUniquePid(std::vector<int> *pids, int pid) {
+    if (pids == nullptr || pid <= 0) {
+        return;
+    }
+    if (std::find(pids->begin(), pids->end(), pid) == pids->end()) {
+        pids->push_back(pid);
+    }
+}
+
+std::vector<int> FindMoonshineHelperPids() {
+    std::vector<int> pids;
+    AppendUniquePid(&pids, ReadJsonFileIfPresent(kMoonshineAsrStatePath).value("pid", 0));
+
+    const std::string helper_path = ResolveMoonshineHelperPath();
+    for (int pid : FindProcessesMatching(helper_path)) {
+        AppendUniquePid(&pids, pid);
+    }
+
+    const std::string python_helper = ResolveScriptPath("BOOSTER_MOONSHINE_ASR_HELPER", kMoonshineAsrHelper);
+    if (helper_path != python_helper) {
+        for (int pid : FindProcessesMatching(python_helper)) {
+            AppendUniquePid(&pids, pid);
+        }
+    }
+
+    for (int pid : FindProcessesMatching("booster_moonshine_asr_native")) {
+        AppendUniquePid(&pids, pid);
+    }
+
+    return pids;
+}
+
+void StopMoonshineHelpers() {
+    const std::vector<int> pids = FindMoonshineHelperPids();
+    for (int pid : pids) {
+        RunCommand("kill -TERM " + std::to_string(pid));
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    for (int pid : pids) {
+        if (IsProcessRunning(pid)) {
+            RunCommand("kill -KILL " + std::to_string(pid));
+        }
+    }
 }
 
 std::string ResolveCameraPreviewPath() {
@@ -452,6 +587,8 @@ public:
 
     json StatusJson() const {
         const json whisperlive_asr = WhisperLiveAsrStatus();
+        const json moonshine_asr = MoonshineAsrStatus();
+        const json openai_asr = OpenAiAsrStatus();
         std::scoped_lock lock(speech_mutex_);
         std::string last_heard = last_heard_text_;
         std::string last_spoken = last_spoken_text_;
@@ -461,6 +598,24 @@ public:
                 last_heard = helper_last_heard;
             }
             if (whisperlive_asr.value("running", false)) {
+                last_spoken.clear();
+            }
+        }
+        if (moonshine_asr.is_object()) {
+            const auto helper_last_heard = Trim(moonshine_asr.value("last_heard", std::string()));
+            if (moonshine_asr.value("running", false) && !helper_last_heard.empty()) {
+                last_heard = helper_last_heard;
+            }
+            if (moonshine_asr.value("running", false)) {
+                last_spoken.clear();
+            }
+        }
+        if (openai_asr.is_object()) {
+            const auto helper_last_heard = Trim(openai_asr.value("last_heard", std::string()));
+            if (openai_asr.value("running", false) && !helper_last_heard.empty()) {
+                last_heard = helper_last_heard;
+            }
+            if (openai_asr.value("running", false)) {
                 last_spoken.clear();
             }
         }
@@ -480,6 +635,16 @@ public:
                     {"label", "WhisperLive ASR"},
                     {"available", whisperlive_asr.value("available", false)},
                 }},
+                {"moonshine_asr", {
+                    {"id", kBackendMoonshineAsr},
+                    {"label", "Moonshine ASR"},
+                    {"available", moonshine_asr.value("available", false)},
+                }},
+                {"openai_asr", {
+                    {"id", kBackendOpenAiAsr},
+                    {"label", "OpenAI ASR"},
+                    {"available", openai_asr.value("available", false)},
+                }},
             }},
             {"tts_transport", BOOSTER_DEV_MODE ? "mock" : "ros_rtc_service"},
             {"speech_debug", {
@@ -487,6 +652,8 @@ public:
                 {"last_spoken", last_spoken},
             }},
             {"whisperlive_asr", whisperlive_asr},
+            {"moonshine_asr", moonshine_asr},
+            {"openai_asr", openai_asr},
         };
     }
 
@@ -616,6 +783,256 @@ public:
 #endif
     }
 
+    json StartMoonshineAsr(const std::string &model = std::string()) const {
+#if BOOSTER_DEV_MODE
+        return {
+            {"ok", true},
+            {"action", "moonshine_asr_start"},
+            {"backend", kBackendMoonshineAsr},
+            {"dev_mode", true},
+            {"note", "Moonshine ASR start is mocked in dev mode."},
+        };
+#else
+        const json stop_result = StopMoonshineAsr();
+        const std::string helper_path = ResolveMoonshineHelperPath();
+        const std::string helper_target = BuildHelperLaunchTarget(helper_path);
+        const std::string requested_model = model.empty() ? std::string("medium-streaming") : model;
+        const std::string command =
+            "BOOSTER_MOONSHINE_ASR_LOG_PATH=" + ShellEscape(kMoonshineAsrLogPath) + " " +
+            "BOOSTER_MOONSHINE_ASR_DEBUG_LOG_PATH=" + ShellEscape(kMoonshineAsrDebugLogPath) + " " +
+            "BOOSTER_MOONSHINE_ASR_STATE_PATH=" + ShellEscape(kMoonshineAsrStatePath) + " " +
+            "BOOSTER_MOONSHINE_ASR_INPUT_WAV_PATH=" + ShellEscape(kMoonshineAsrInputWavPath) + " " +
+            "BOOSTER_MOONSHINE_ASR_MODEL=" + ShellEscape(requested_model) + " " +
+            helper_target + " >> " + ShellEscape(kMoonshineAsrLogPath) + " 2>&1 & echo $!";
+
+        int status = 0;
+        const std::string output = RunCommand("bash -lc " + ShellEscape(command), &status);
+        const std::string pid_text = Trim(output);
+        int spawned_pid = 0;
+        try {
+            if (!pid_text.empty()) {
+                spawned_pid = std::stoi(pid_text);
+            }
+        } catch (...) {
+        }
+        json result = {
+            {"ok", status == 0 && !pid_text.empty()},
+            {"action", "moonshine_asr_start"},
+            {"backend", kBackendMoonshineAsr},
+            {"requested_model", requested_model},
+            {"helper_exit_status", status},
+            {"log_path", kMoonshineAsrLogPath},
+            {"debug_log_path", kMoonshineAsrDebugLogPath},
+            {"state_path", kMoonshineAsrStatePath},
+            {"input_wav_path", kMoonshineAsrInputWavPath},
+            {"spawned_pid", spawned_pid},
+            {"auto_stop_result", stop_result},
+        };
+        json helper_status = json::object();
+        for (int attempt = 0; attempt < 10; ++attempt) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            helper_status = MoonshineAsrStatus();
+            if (spawned_pid <= 0) {
+                break;
+            }
+            if (helper_status.value("pid", 0) == spawned_pid) {
+                break;
+            }
+        }
+        for (auto it = helper_status.begin(); it != helper_status.end(); ++it) {
+            result[it.key()] = it.value();
+        }
+        result["spawned_pid"] = spawned_pid;
+        if (spawned_pid > 0 && result.value("pid", 0) != spawned_pid) {
+            result["pid"] = spawned_pid;
+        }
+        return result;
+#endif
+    }
+
+    json StopMoonshineAsr() const {
+#if BOOSTER_DEV_MODE
+        return {
+            {"ok", true},
+            {"action", "moonshine_asr_stop"},
+            {"backend", kBackendMoonshineAsr},
+            {"dev_mode", true},
+            {"note", "Moonshine ASR stop is mocked in dev mode."},
+        };
+#else
+        const json before = MoonshineAsrStatus();
+        const std::vector<int> pids = FindMoonshineHelperPids();
+        StopMoonshineHelpers();
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        json result = MoonshineAsrStatus();
+        result["ok"] = true;
+        result["action"] = "moonshine_asr_stop";
+        result["backend"] = kBackendMoonshineAsr;
+        result["stopped_pid"] = before.value("pid", 0);
+        result["stopped_pids"] = pids;
+        return result;
+#endif
+    }
+
+    json StartOpenAiAsr(const std::string &model = std::string()) const {
+#if BOOSTER_DEV_MODE
+        return {
+            {"ok", true},
+            {"action", "openai_asr_start"},
+            {"backend", kBackendOpenAiAsr},
+            {"dev_mode", true},
+            {"note", "OpenAI ASR start is mocked in dev mode."},
+        };
+#else
+        const json stop_result = StopOpenAiAsr();
+        const std::string helper_path = ResolveOpenAiAsrHelperPath();
+        const std::string launcher =
+            "import os,subprocess,sys;"
+            "os.environ['BOOSTER_OPENAI_ASR_LOG_PATH']=sys.argv[2];"
+            "os.environ['BOOSTER_OPENAI_ASR_STATE_PATH']=sys.argv[3];"
+            "os.environ['BOOSTER_OPENAI_ASR_MODEL']=sys.argv[4];"
+            "log=open(sys.argv[2],'ab', buffering=0);"
+            "proc=subprocess.Popen(['python3', sys.argv[1]], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True);"
+            "print(proc.pid)";
+        const std::string requested_model = model.empty() ? std::string("gpt-4o-mini-transcribe") : model;
+        const std::string command =
+            "python3 -c " + ShellEscape(launcher) + " " + ShellEscape(helper_path) + " " +
+            ShellEscape(kOpenAiAsrLogPath) + " " + ShellEscape(kOpenAiAsrStatePath) + " " +
+            ShellEscape(requested_model);
+
+        int status = 0;
+        const std::string output = RunCommand("bash -lc " + ShellEscape(command), &status);
+        const std::string pid_text = Trim(output);
+        int spawned_pid = 0;
+        try {
+            if (!pid_text.empty()) {
+                spawned_pid = std::stoi(pid_text);
+            }
+        } catch (...) {
+        }
+        json result = {
+            {"ok", status == 0 && !pid_text.empty()},
+            {"action", "openai_asr_start"},
+            {"backend", kBackendOpenAiAsr},
+            {"requested_model", requested_model},
+            {"helper_exit_status", status},
+            {"log_path", kOpenAiAsrLogPath},
+            {"state_path", kOpenAiAsrStatePath},
+            {"spawned_pid", spawned_pid},
+            {"auto_stop_result", stop_result},
+        };
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        json helper_status = OpenAiAsrStatus();
+        for (auto it = helper_status.begin(); it != helper_status.end(); ++it) {
+            result[it.key()] = it.value();
+        }
+        return result;
+#endif
+    }
+
+    json StartOpenAiAsr(const json &config) const {
+#if BOOSTER_DEV_MODE
+        return {
+            {"ok", true},
+            {"action", "openai_asr_start"},
+            {"backend", kBackendOpenAiAsr},
+            {"dev_mode", true},
+            {"note", "OpenAI ASR start is mocked in dev mode."},
+        };
+#else
+        const json stop_result = StopOpenAiAsr();
+        const std::string helper_path = ResolveOpenAiAsrHelperPath();
+        const std::string launcher =
+            "import os,subprocess,sys,json;"
+            "cfg=json.loads(sys.argv[5]);"
+            "os.environ['BOOSTER_OPENAI_ASR_LOG_PATH']=sys.argv[2];"
+            "os.environ['BOOSTER_OPENAI_ASR_STATE_PATH']=sys.argv[3];"
+            "os.environ['BOOSTER_OPENAI_ASR_MODEL']=sys.argv[4];"
+            "mapping={"
+            "'language':'BOOSTER_OPENAI_ASR_LANGUAGE',"
+            "'prompt':'BOOSTER_OPENAI_ASR_PROMPT',"
+            "'sample_rate':'BOOSTER_OPENAI_ASR_SAMPLE_RATE',"
+            "'channels':'BOOSTER_OPENAI_ASR_CHANNELS',"
+            "'frame_samples':'BOOSTER_OPENAI_ASR_FRAME_SAMPLES',"
+            "'rms_threshold':'BOOSTER_OPENAI_ASR_RMS_THRESHOLD',"
+            "'start_threshold':'BOOSTER_OPENAI_ASR_START_THRESHOLD',"
+            "'continue_threshold':'BOOSTER_OPENAI_ASR_CONTINUE_THRESHOLD',"
+            "'silence_frames':'BOOSTER_OPENAI_ASR_SILENCE_FRAMES',"
+            "'min_voiced_frames':'BOOSTER_OPENAI_ASR_MIN_VOICED_FRAMES',"
+            "'prefix_frames':'BOOSTER_OPENAI_ASR_PREFIX_FRAMES',"
+            "'max_frames':'BOOSTER_OPENAI_ASR_MAX_FRAMES'};"
+            "for key, env_name in mapping.items():"
+            " value=cfg.get(key);"
+            " if value is None: continue;"
+            " text=str(value).strip();"
+            " if text=='': continue;"
+            " os.environ[env_name]=text;"
+            "log=open(sys.argv[2],'ab', buffering=0);"
+            "proc=subprocess.Popen(['python3', sys.argv[1]], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True);"
+            "print(proc.pid)";
+        const std::string requested_model = Trim(config.value("model", std::string("gpt-4o-mini-transcribe")));
+        const std::string command =
+            "python3 -c " + ShellEscape(launcher) + " " + ShellEscape(helper_path) + " " +
+            ShellEscape(kOpenAiAsrLogPath) + " " + ShellEscape(kOpenAiAsrStatePath) + " " +
+            ShellEscape(requested_model.empty() ? std::string("gpt-4o-mini-transcribe") : requested_model) + " " +
+            ShellEscape(config.dump());
+
+        int status = 0;
+        const std::string output = RunCommand("bash -lc " + ShellEscape(command), &status);
+        const std::string pid_text = Trim(output);
+        int spawned_pid = 0;
+        try {
+            if (!pid_text.empty()) {
+                spawned_pid = std::stoi(pid_text);
+            }
+        } catch (...) {
+        }
+        json result = {
+            {"ok", status == 0 && !pid_text.empty()},
+            {"action", "openai_asr_start"},
+            {"backend", kBackendOpenAiAsr},
+            {"requested_model", requested_model.empty() ? std::string("gpt-4o-mini-transcribe") : requested_model},
+            {"requested_config", config},
+            {"helper_exit_status", status},
+            {"log_path", kOpenAiAsrLogPath},
+            {"state_path", kOpenAiAsrStatePath},
+            {"spawned_pid", spawned_pid},
+            {"auto_stop_result", stop_result},
+        };
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        json helper_status = OpenAiAsrStatus();
+        for (auto it = helper_status.begin(); it != helper_status.end(); ++it) {
+            result[it.key()] = it.value();
+        }
+        return result;
+#endif
+    }
+
+    json StopOpenAiAsr() const {
+#if BOOSTER_DEV_MODE
+        return {
+            {"ok", true},
+            {"action", "openai_asr_stop"},
+            {"backend", kBackendOpenAiAsr},
+            {"dev_mode", true},
+            {"note", "OpenAI ASR stop is mocked in dev mode."},
+        };
+#else
+        const json before = OpenAiAsrStatus();
+        const int pid = before.value("pid", 0);
+        if (pid > 0) {
+            RunCommand("kill -TERM " + std::to_string(pid));
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        json result = OpenAiAsrStatus();
+        result["ok"] = true;
+        result["action"] = "openai_asr_stop";
+        result["backend"] = kBackendOpenAiAsr;
+        result["stopped_pid"] = pid;
+        return result;
+#endif
+    }
+
     json GetVolume() const {
 #if BOOSTER_DEV_MODE
         return {
@@ -715,6 +1132,60 @@ private:
                 {"last_error", ""},
                 {"log_path", kWhisperLiveAsrLogPath},
                 {"state_path", kWhisperLiveAsrStatePath},
+            };
+        }
+        const int pid = status.value("pid", 0);
+        if (!IsProcessRunning(pid)) {
+            status["running"] = false;
+            if (status.value("state", std::string()) != "error") {
+                status["state"] = "stopped";
+            }
+        }
+        return status;
+    }
+
+    json MoonshineAsrStatus() const {
+        json status = ReadJsonFileIfPresent(kMoonshineAsrStatePath);
+        if (!status.is_object() || status.empty()) {
+            return {
+                {"available", std::filesystem::exists(ResolveMoonshineHelperPath())},
+                {"running", false},
+                {"state", "stopped"},
+                {"last_heard", ""},
+                {"last_error", ""},
+                {"log_path", kMoonshineAsrLogPath},
+                {"debug_log_path", kMoonshineAsrDebugLogPath},
+                {"state_path", kMoonshineAsrStatePath},
+                {"input_wav_path", kMoonshineAsrInputWavPath},
+                {"debug_tail", json::array()},
+            };
+        }
+        const int pid = status.value("pid", 0);
+        if (!IsProcessRunning(pid)) {
+            status["running"] = false;
+            if (status.value("state", std::string()) != "error") {
+                status["state"] = "stopped";
+            }
+        }
+        status["debug_tail"] = ReadTailLinesIfPresent(kMoonshineAsrLogPath, 12);
+        return status;
+    }
+
+    json OpenAiAsrStatus() const {
+        json status = ReadJsonFileIfPresent(kOpenAiAsrStatePath);
+        if (!status.is_object() || status.empty()) {
+            const bool has_api_key =
+                !Trim(std::getenv("OPENAI_API_KEY") ? std::getenv("OPENAI_API_KEY") : "").empty() ||
+                !Trim(std::getenv("CHATGPT_API_KEY") ? std::getenv("CHATGPT_API_KEY") : "").empty() ||
+                !Trim(std::getenv("CHAT_GPT_API") ? std::getenv("CHAT_GPT_API") : "").empty();
+            return {
+                {"available", std::filesystem::exists(ResolveOpenAiAsrHelperPath()) && has_api_key},
+                {"running", false},
+                {"state", "stopped"},
+                {"last_heard", ""},
+                {"last_error", ""},
+                {"log_path", kOpenAiAsrLogPath},
+                {"state_path", kOpenAiAsrStatePath},
             };
         }
         const int pid = status.value("pid", 0);
@@ -964,6 +1435,41 @@ http::response<http::string_body> HandleRequest(
 
     if (req.method() == http::verb::post && path == "/whisperlive/asr/stop") {
         return JsonResponse(http::status::ok, wrapper.StopWhisperLiveAsr());
+    }
+
+    if (req.method() == http::verb::post && path == "/moonshine/asr/start") {
+        try {
+            const json body = ParseOptionalJsonBody(req.body());
+            const auto model = Trim(body.value("model", std::string("medium-streaming")));
+            return JsonResponse(http::status::ok, wrapper.StartMoonshineAsr(model));
+        } catch (const std::exception &e) {
+            return JsonResponse(http::status::bad_request, {
+                {"ok", false},
+                {"error", e.what()},
+                {"path", path},
+            });
+        }
+    }
+
+    if (req.method() == http::verb::post && path == "/moonshine/asr/stop") {
+        return JsonResponse(http::status::ok, wrapper.StopMoonshineAsr());
+    }
+
+    if (req.method() == http::verb::post && path == "/openai/asr/start") {
+        try {
+            const json body = ParseOptionalJsonBody(req.body());
+            return JsonResponse(http::status::ok, wrapper.StartOpenAiAsr(body));
+        } catch (const std::exception &e) {
+            return JsonResponse(http::status::bad_request, {
+                {"ok", false},
+                {"error", e.what()},
+                {"path", path},
+            });
+        }
+    }
+
+    if (req.method() == http::verb::post && path == "/openai/asr/stop") {
+        return JsonResponse(http::status::ok, wrapper.StopOpenAiAsr());
     }
 
     if (req.method() == http::verb::post && path == "/audio/volume") {

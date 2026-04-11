@@ -1,6 +1,29 @@
 # Booster Native SDK Lab
 
+## Robot Hardware Snapshot
+
+Observed directly over SSH on `2026-04-10` from `booster@192.168.5.149`.
+
+- Platform: Qualcomm QCS8550 development-kit-class board. The device tree reports `Qualcomm Technologies, Inc. Kalamap QCS8550 DK` with compatibles `qcom,kalamap-iot`, `qcom,kalamap`, and `qcom,iot`.
+- OS: Ubuntu 22.04.2 LTS on `arm64`, kernel `5.15.153-qki-consolidate-android13-8-g412c9682f705-dirty`.
+- CPU: 8-core heterogeneous ARMv9 cluster. From `/proc/cpuinfo` part IDs, this unit appears to be `3x Cortex-A510` up to `2.016 GHz`, `2x Cortex-A715` up to `2.803 GHz`, `2x Cortex-A710` up to `2.803 GHz`, and `1x Cortex-X3` up to `3.187 GHz`.
+- GPU: `Adreno740v2` from `/sys/class/kgsl/kgsl-3d0/gpu_model`.
+- Memory: `10 GiB` RAM visible to Linux, with `5.4 GiB` zram swap configured.
+- Storage: SK hynix UFS device `HN8T05DEHKX073` on the Qualcomm UFS host (`ID_PATH=platform-1d84000.ufshc-scsi-0:0:0:0`). Main root partition is `115G`, with `/` currently mounted from `/dev/sda2` (`94G` filesystem, `47G` free at capture time). The partition layout also includes dedicated `/firmware` and `/dsp` mounts.
+- Networking: `wlan0`, `eth0`, and `usbeth` are active on this robot. PCIe/USB enumeration shows multiple Gigabit Ethernet adapters, including Realtek `RTL8111/8168/8411` controllers and a Realtek `RTL8153` USB GbE adapter.
+- Audio I/O: capture is through an `iFLYTEK XFM-DP-V0.0.18` USB microphone array (`16 kHz`, mono in PulseAudio), and playback is through a `C-Media USB Audio Device`.
+- USB / expansion devices seen live: Renesas `uPD720201` USB 3.0 controller, the `XFM-DP-V0.0.18` mic array, the C-Media USB audio device, and a QinHeng USB serial device.
+- Camera / video nodes: `/dev/video32` and `/dev/video33` exist on this unit, but the camera model is not identified by the currently installed userspace tools.
+- Accelerator note: there is no NVIDIA stack on this robot (`nvidia-smi` is absent). Any local inference or ASR acceleration here needs to target Qualcomm CPU/GPU/NPU paths rather than CUDA.
+
 Minimal C++ HTTP wrapper over the native Booster SDK in [`../booster_robotics_sdk`](../booster_robotics_sdk).
+
+The lab currently supports four speech paths:
+
+- Native RTC chat/TTS through the robot service
+- WhisperLive ASR
+- Moonshine ASR
+- OpenAI ASR via the `v1/audio/transcriptions` API using `CHATGPT_API_KEY` or `OPENAI_API_KEY`
 
 ## What It Exposes
 

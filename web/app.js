@@ -11,9 +11,27 @@ const rtcStopButton = document.getElementById("rtc-stop");
 const whisperLiveStartButton = document.getElementById("whisperlive-start");
 const whisperLiveStopButton = document.getElementById("whisperlive-stop");
 const whisperLiveModel = document.getElementById("whisperlive-model");
+const moonshineStartButton = document.getElementById("moonshine-start");
+const moonshineStopButton = document.getElementById("moonshine-stop");
+const moonshineModel = document.getElementById("moonshine-model");
+const openAiStartButton = document.getElementById("openai-start");
+const openAiStopButton = document.getElementById("openai-stop");
+const openAiModel = document.getElementById("openai-model");
+const openAiStartThreshold = document.getElementById("openai-start-threshold");
+const openAiStartThresholdValue = document.getElementById("openai-start-threshold-value");
+const openAiContinueThreshold = document.getElementById("openai-continue-threshold");
+const openAiContinueThresholdValue = document.getElementById("openai-continue-threshold-value");
+const openAiSilenceFrames = document.getElementById("openai-silence-frames");
+const openAiSilenceFramesValue = document.getElementById("openai-silence-frames-value");
+const openAiMaxFrames = document.getElementById("openai-max-frames");
+const openAiMaxFramesValue = document.getElementById("openai-max-frames-value");
 const rtcStatus = document.getElementById("rtc-status");
 const whisperLiveStatus = document.getElementById("whisperlive-status");
 const whisperLiveNote = document.getElementById("whisperlive-note");
+const moonshineStatus = document.getElementById("moonshine-status");
+const moonshineNote = document.getElementById("moonshine-note");
+const openAiStatus = document.getElementById("openai-status");
+const openAiNote = document.getElementById("openai-note");
 const volumeSlider = document.getElementById("volume-slider");
 const volumeValue = document.getElementById("volume-value");
 const enableVideo = document.getElementById("enable-video");
@@ -28,8 +46,38 @@ let copyButtonTimer = null;
 let videoRefreshTimer = null;
 let lastHeardText = "";
 let lastSpokenText = "";
+let lastMoonshineDebugText = "";
 let selectedBackend = "rtc";
 const whisperLiveModelStorageKey = "booster.whisperlive.model";
+const moonshineModelStorageKey = "booster.moonshine.model";
+const openAiModelStorageKey = "booster.openai.model";
+const openAiTuningStorageKey = "booster.openai.tuning";
+const openAiDefaults = {
+  start_threshold: 1100,
+  continue_threshold: 550,
+  silence_frames: 13,
+  max_frames: 125,
+};
+
+function getOpenAiTuning() {
+  return {
+    start_threshold: Number(openAiStartThreshold.value),
+    continue_threshold: Number(openAiContinueThreshold.value),
+    silence_frames: Number(openAiSilenceFrames.value),
+    max_frames: Number(openAiMaxFrames.value),
+  };
+}
+
+function renderOpenAiTuningValues() {
+  openAiStartThresholdValue.textContent = String(openAiStartThreshold.value);
+  openAiContinueThresholdValue.textContent = String(openAiContinueThreshold.value);
+  openAiSilenceFramesValue.textContent = String(openAiSilenceFrames.value);
+  openAiMaxFramesValue.textContent = String(openAiMaxFrames.value);
+}
+
+function persistOpenAiTuning() {
+  window.localStorage.setItem(openAiTuningStorageKey, JSON.stringify(getOpenAiTuning()));
+}
 
 function setBackendStatus(element, label, active) {
   element.textContent = label;
@@ -39,18 +87,38 @@ function setBackendStatus(element, label, active) {
 function updateBackendControls() {
   const rtcSelected = selectedBackend === "rtc";
   const whisperLiveSelected = selectedBackend === "whisperlive_asr";
+  const moonshineSelected = selectedBackend === "moonshine_asr";
+  const openAiSelected = selectedBackend === "openai_asr";
 
   rtcStartButton.disabled = !rtcSelected;
   rtcStopButton.disabled = !rtcSelected;
   whisperLiveStartButton.disabled = !whisperLiveSelected;
   whisperLiveStopButton.disabled = !whisperLiveSelected;
   whisperLiveModel.disabled = !whisperLiveSelected;
+  moonshineStartButton.disabled = !moonshineSelected;
+  moonshineStopButton.disabled = !moonshineSelected;
+  moonshineModel.disabled = !moonshineSelected;
+  openAiStartButton.disabled = !openAiSelected;
+  openAiStopButton.disabled = !openAiSelected;
+  openAiModel.disabled = !openAiSelected;
+  openAiStartThreshold.disabled = !openAiSelected;
+  openAiContinueThreshold.disabled = !openAiSelected;
+  openAiSilenceFrames.disabled = !openAiSelected;
+  openAiMaxFrames.disabled = !openAiSelected;
 
   setBackendStatus(rtcStatus, rtcSelected ? "Active" : "Inactive", rtcSelected);
   setBackendStatus(whisperLiveStatus, whisperLiveSelected ? "Active" : "Inactive", whisperLiveSelected);
+  setBackendStatus(moonshineStatus, moonshineSelected ? "Active" : "Inactive", moonshineSelected);
+  setBackendStatus(openAiStatus, openAiSelected ? "Active" : "Inactive", openAiSelected);
   whisperLiveNote.textContent = whisperLiveSelected
     ? "WhisperLive ASR listens on the robot mic and posts transcripts into the debug log."
     : "Select WhisperLive ASR to enable robot-side transcription controls.";
+  moonshineNote.textContent = moonshineSelected
+    ? "Moonshine ASR listens on the robot mic and posts transcripts into the heard window."
+    : "Select Moonshine ASR to enable robot-side transcription controls.";
+  openAiNote.textContent = openAiSelected
+    ? "OpenAI ASR uploads detected speech segments for server-side transcription."
+    : "Select OpenAI ASR to enable cloud transcription using the server-side API key.";
 }
 
 function renderBattery(battery) {
@@ -93,6 +161,27 @@ function appendDebug(title, payload) {
   debugWindow.textContent = debugWindow.textContent
     ? `${block}\n\n${debugWindow.textContent}`
     : block;
+}
+
+function filterMoonshineDebugLines(lines) {
+  return lines.filter((line) => {
+    const text = String(line || "").trim();
+    if (!text) {
+      return false;
+    }
+    return (
+      text.includes("starting model=") ||
+      text.includes("capture command:") ||
+      text === "listening" ||
+      text.endsWith(" listening") ||
+      text.includes("partial:") ||
+      text.includes("heard:") ||
+      text.includes("error:") ||
+      text.includes("fatal:") ||
+      text.endsWith(" stopped") ||
+      text === "stopped"
+    );
+  });
 }
 
 function setCopyButtonState(label, copied = false) {
@@ -153,6 +242,7 @@ async function refreshSpeechDebug() {
   const response = await fetch("/health");
   const data = await response.json();
   const speech = data?.wrapper?.speech_debug || {};
+  const moonshine = data?.wrapper?.moonshine_asr || {};
   const heard = typeof speech.last_heard === "string" ? speech.last_heard.trim() : "";
   const spoken = typeof speech.last_spoken === "string" ? speech.last_spoken.trim() : "";
 
@@ -164,6 +254,15 @@ async function refreshSpeechDebug() {
   if (spoken && spoken !== lastSpokenText) {
     lastSpokenText = spoken;
     appendDebug("Robot said", spoken);
+  }
+
+  if (Array.isArray(moonshine.debug_tail) && moonshine.debug_tail.length > 0) {
+    const filtered = filterMoonshineDebugLines(moonshine.debug_tail);
+    const joined = filtered.join("\n").trim();
+    if (joined && joined !== lastMoonshineDebugText) {
+      lastMoonshineDebugText = joined;
+      appendDebug("[Moonshine ASR] Debug", joined);
+    }
   }
 }
 
@@ -268,6 +367,68 @@ whisperLiveModel.addEventListener("change", () => {
   appendDebug("WhisperLive model selected", whisperLiveModel.value);
 });
 
+moonshineStartButton.addEventListener("click", () => {
+  const payload = {
+    model: moonshineModel.value,
+  };
+  appendDebug("[Moonshine ASR] /moonshine/asr/start request", payload);
+  postJson("/moonshine/asr/start", payload).catch((error) => {
+    appendDebug("[Moonshine ASR] Start listening error", String(error));
+  });
+});
+
+moonshineStopButton.addEventListener("click", () => {
+  const payload = {};
+  appendDebug("[Moonshine ASR] /moonshine/asr/stop request", payload);
+  postJson("/moonshine/asr/stop", payload).catch((error) => {
+    appendDebug("[Moonshine ASR] Stop listening error", String(error));
+  });
+});
+
+moonshineModel.addEventListener("change", () => {
+  window.localStorage.setItem(moonshineModelStorageKey, moonshineModel.value);
+  appendDebug("Moonshine model selected", moonshineModel.value);
+});
+
+openAiStartButton.addEventListener("click", () => {
+  const payload = {
+    model: openAiModel.value,
+    start_threshold: Number(openAiStartThreshold.value),
+    continue_threshold: Number(openAiContinueThreshold.value),
+    silence_frames: Number(openAiSilenceFrames.value),
+    max_frames: Number(openAiMaxFrames.value),
+  };
+  appendDebug("[OpenAI ASR] /openai/asr/start request", payload);
+  postJson("/openai/asr/start", payload).catch((error) => {
+    appendDebug("[OpenAI ASR] Start listening error", String(error));
+  });
+});
+
+openAiStopButton.addEventListener("click", () => {
+  const payload = {};
+  appendDebug("[OpenAI ASR] /openai/asr/stop request", payload);
+  postJson("/openai/asr/stop", payload).catch((error) => {
+    appendDebug("[OpenAI ASR] Stop listening error", String(error));
+  });
+});
+
+openAiModel.addEventListener("change", () => {
+  window.localStorage.setItem(openAiModelStorageKey, openAiModel.value);
+  appendDebug("OpenAI model selected", openAiModel.value);
+});
+
+for (const [slider, render] of [
+  [openAiStartThreshold, renderOpenAiTuningValues],
+  [openAiContinueThreshold, renderOpenAiTuningValues],
+  [openAiSilenceFrames, renderOpenAiTuningValues],
+  [openAiMaxFrames, renderOpenAiTuningValues],
+]) {
+  slider.addEventListener("input", () => {
+    render();
+    persistOpenAiTuning();
+  });
+}
+
 for (const option of backendOptions) {
   option.addEventListener("change", () => {
     if (!option.checked) {
@@ -275,7 +436,16 @@ for (const option of backendOptions) {
     }
     selectedBackend = option.value;
     updateBackendControls();
-    appendDebug("Speech backend selected", selectedBackend === "rtc" ? "Native RTC" : "WhisperLive ASR");
+    appendDebug(
+      "Speech backend selected",
+      selectedBackend === "rtc"
+        ? "Native RTC"
+        : selectedBackend === "whisperlive_asr"
+          ? "WhisperLive ASR"
+          : selectedBackend === "moonshine_asr"
+            ? "Moonshine ASR"
+            : "OpenAI ASR",
+    );
   });
 }
 
@@ -350,5 +520,36 @@ videoStatus.textContent = "Off";
     whisperLiveModel.value = savedModel;
   }
 }
+{
+  const savedModel = window.localStorage.getItem(moonshineModelStorageKey);
+  if (savedModel) {
+    moonshineModel.value = savedModel;
+  } else {
+    moonshineModel.value = "medium-streaming";
+  }
+}
+{
+  const savedModel = window.localStorage.getItem(openAiModelStorageKey);
+  if (savedModel) {
+    openAiModel.value = savedModel;
+  } else {
+    openAiModel.value = "gpt-4o-mini-transcribe";
+  }
+}
+{
+  let tuning = openAiDefaults;
+  const raw = window.localStorage.getItem(openAiTuningStorageKey);
+  if (raw) {
+    try {
+      tuning = { ...openAiDefaults, ...JSON.parse(raw) };
+    } catch (_error) {
+    }
+  }
+  openAiStartThreshold.value = String(tuning.start_threshold);
+  openAiContinueThreshold.value = String(tuning.continue_threshold);
+  openAiSilenceFrames.value = String(tuning.silence_frames);
+  openAiMaxFrames.value = String(tuning.max_frames);
+}
+renderOpenAiTuningValues();
 updateBackendControls();
 setCopyButtonState("Copy Log");

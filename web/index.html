@@ -28,6 +28,14 @@
                   <input id="backend-whisperlive" type="radio" name="speech-backend" value="whisperlive_asr">
                   <span>WhisperLive ASR</span>
                 </label>
+                <label class="backend-option">
+                  <input id="backend-moonshine" type="radio" name="speech-backend" value="moonshine_asr">
+                  <span>Moonshine ASR</span>
+                </label>
+                <label class="backend-option">
+                  <input id="backend-openai" type="radio" name="speech-backend" value="openai_asr">
+                  <span>OpenAI ASR</span>
+                </label>
               </div>
             </div>
 
@@ -68,6 +76,83 @@
                 </select>
               </div>
               <p id="whisperlive-note" class="backend-note">Select WhisperLive ASR to enable robot-side transcription.</p>
+            </section>
+
+            <section class="backend-panel" aria-labelledby="moonshine-controls-title">
+              <div class="backend-head">
+                <div>
+                  <h3 id="moonshine-controls-title" class="video-title">Moonshine ASR</h3>
+                  <p class="video-copy">Robot mic capture with the local Moonshine Voice streaming transcriber.</p>
+                </div>
+                <span id="moonshine-status" class="backend-status backend-status-idle">Inactive</span>
+              </div>
+              <div class="button-row">
+                <button id="moonshine-start" class="ghost">Start Listening</button>
+                <button id="moonshine-stop" class="ghost">Stop Listening</button>
+              </div>
+              <div class="volume-panel">
+                <div class="volume-head">
+                  <label class="tts-label" for="moonshine-model">ASR Model</label>
+                </div>
+                <select id="moonshine-model" class="volume-slider">
+                  <option value="tiny-streaming">tiny-streaming</option>
+                  <option value="small-streaming">small-streaming</option>
+                  <option value="medium-streaming" selected>medium-streaming</option>
+                </select>
+              </div>
+              <p id="moonshine-note" class="backend-note">Select Moonshine ASR to enable robot-side transcription controls.</p>
+            </section>
+
+            <section class="backend-panel" aria-labelledby="openai-controls-title">
+              <div class="backend-head">
+                <div>
+                  <h3 id="openai-controls-title" class="video-title">OpenAI ASR</h3>
+                  <p class="video-copy">Robot mic capture with server-side OpenAI transcription.</p>
+                </div>
+                <span id="openai-status" class="backend-status backend-status-idle">Inactive</span>
+              </div>
+              <div class="button-row">
+                <button id="openai-start" class="ghost">Start Listening</button>
+                <button id="openai-stop" class="ghost">Stop Listening</button>
+              </div>
+              <div class="volume-panel">
+                <div class="volume-head">
+                  <label class="tts-label" for="openai-model">ASR Model</label>
+                </div>
+                <select id="openai-model" class="volume-slider">
+                  <option value="gpt-4o-mini-transcribe" selected>gpt-4o-mini-transcribe</option>
+                  <option value="gpt-4o-transcribe">gpt-4o-transcribe</option>
+                </select>
+              </div>
+              <div class="volume-panel">
+                <div class="volume-head">
+                  <label class="tts-label" for="openai-start-threshold">Start Threshold</label>
+                  <span id="openai-start-threshold-value" class="volume-value">1100</span>
+                </div>
+                <input id="openai-start-threshold" class="volume-slider" type="range" min="200" max="4000" step="50" value="1100">
+              </div>
+              <div class="volume-panel">
+                <div class="volume-head">
+                  <label class="tts-label" for="openai-continue-threshold">Continue Threshold</label>
+                  <span id="openai-continue-threshold-value" class="volume-value">550</span>
+                </div>
+                <input id="openai-continue-threshold" class="volume-slider" type="range" min="100" max="3000" step="25" value="550">
+              </div>
+              <div class="volume-panel">
+                <div class="volume-head">
+                  <label class="tts-label" for="openai-silence-frames">Silence Frames</label>
+                  <span id="openai-silence-frames-value" class="volume-value">13</span>
+                </div>
+                <input id="openai-silence-frames" class="volume-slider" type="range" min="2" max="40" step="1" value="13">
+              </div>
+              <div class="volume-panel">
+                <div class="volume-head">
+                  <label class="tts-label" for="openai-max-frames">Max Frames</label>
+                  <span id="openai-max-frames-value" class="volume-value">125</span>
+                </div>
+                <input id="openai-max-frames" class="volume-slider" type="range" min="20" max="200" step="1" value="125">
+              </div>
+              <p id="openai-note" class="backend-note">Select OpenAI ASR to enable cloud transcription using the server-side API key.</p>
             </section>
 
             <div class="battery-card">
