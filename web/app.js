@@ -48,6 +48,7 @@ let videoRefreshTimer = null;
 let lastHeardText = "";
 let lastMoonshineDebugText = "";
 let lastOpenAiBridgeText = "";
+let hasSpeechDebugBaseline = false;
 let selectedBackend = "rtc";
 const whisperLiveModelStorageKey = "booster.whisperlive.model";
 const moonshineModelStorageKey = "booster.moonshine.model";
@@ -248,11 +249,6 @@ async function refreshSpeechDebug() {
   const nativeOpenAiBridge = data?.wrapper?.native_openai_bridge || {};
   const heard = typeof speech.last_heard === "string" ? speech.last_heard.trim() : "";
 
-  if (heard && heard !== lastHeardText) {
-    lastHeardText = heard;
-    heardWindow.textContent = heard;
-  }
-
   if (Array.isArray(moonshine.debug_tail) && moonshine.debug_tail.length > 0) {
     const filtered = filterMoonshineDebugLines(moonshine.debug_tail);
     const joined = filtered.join("\n").trim();
@@ -270,6 +266,22 @@ async function refreshSpeechDebug() {
     bridgeSegment && bridgeSegment !== bridgeResult ? `Last Segment:\n${bridgeSegment}` : "",
     bridgeLines.length ? `Recent Log:\n${bridgeLines.join("\n")}` : "",
   ].filter(Boolean).join("\n\n");
+
+  if (!hasSpeechDebugBaseline) {
+    hasSpeechDebugBaseline = true;
+    lastHeardText = heard;
+    if (Array.isArray(moonshine.debug_tail) && moonshine.debug_tail.length > 0) {
+      const filtered = filterMoonshineDebugLines(moonshine.debug_tail);
+      lastMoonshineDebugText = filtered.join("\n").trim();
+    }
+    lastOpenAiBridgeText = bridgeText;
+    return;
+  }
+
+  if (heard && heard !== lastHeardText) {
+    lastHeardText = heard;
+    heardWindow.textContent = heard;
+  }
 
   if (bridgeText && bridgeText !== lastOpenAiBridgeText) {
     lastOpenAiBridgeText = bridgeText;
@@ -336,24 +348,22 @@ videoPreview.addEventListener("error", () => {
 });
 
 rtcStartButton.addEventListener("click", async () => {
-  const payload = {
-    interrupt_speech_duration: 700,
-  };
-  appendDebug("[Native RTC] /rtc/tts/start request", payload);
+  const payload = {};
+  appendDebug("[Native ASR] /rtc/tts/start request", payload);
   try {
     await postJson("/rtc/tts/start", payload);
   } catch (error) {
-    appendDebug("[Native RTC] Start listening error", String(error));
+    appendDebug("[Native ASR] Start listening error", String(error));
   }
 });
 
 rtcStopButton.addEventListener("click", async () => {
   const payload = {};
-  appendDebug("[Native RTC] /rtc/tts/stop request", payload);
+  appendDebug("[Native ASR] /rtc/tts/stop request", payload);
   try {
     await postJson("/rtc/tts/stop", payload);
   } catch (error) {
-    appendDebug("[Native RTC] Stop listening error", String(error));
+    appendDebug("[Native ASR] Stop listening error", String(error));
   }
 });
 
@@ -452,7 +462,7 @@ for (const option of backendOptions) {
     appendDebug(
       "Speech backend selected",
       selectedBackend === "rtc"
-        ? "Native RTC"
+        ? "Native ASR"
         : selectedBackend === "whisperlive_asr"
           ? "WhisperLive ASR"
           : selectedBackend === "moonshine_asr"
