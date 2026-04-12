@@ -55,11 +55,13 @@ constexpr char kRosTtsHelper[] = "scripts/ros_rtc_tts.py";
 constexpr char kWhisperLiveAsrHelper[] = "scripts/whisperlive_asr_daemon.py";
 constexpr char kMoonshineAsrHelper[] = "scripts/moonshine_asr_daemon.py";
 constexpr char kOpenAiAsrHelper[] = "scripts/openai_asr_daemon.py";
+constexpr char kOpenAiRealtimeHelper[] = "scripts/openai_realtime_daemon.py";
 constexpr int kDefaultInterruptSpeechDurationMs = 700;
 constexpr char kBackendRtc[] = "rtc";
 constexpr char kBackendWhisperLiveAsr[] = "whisperlive_asr";
 constexpr char kBackendMoonshineAsr[] = "moonshine_asr";
 constexpr char kBackendOpenAiAsr[] = "openai_asr";
+constexpr char kBackendOpenAiRealtime[] = "openai_realtime";
 constexpr char kWhisperLiveAsrStatePath[] = "/tmp/booster_whisperlive_asr_state.json";
 constexpr char kWhisperLiveAsrLogPath[] = "/tmp/booster_whisperlive_asr.log";
 constexpr char kMoonshineAsrStatePath[] = "/tmp/booster_moonshine_asr_state.json";
@@ -68,6 +70,8 @@ constexpr char kMoonshineAsrDebugLogPath[] = "/tmp/booster_moonshine_asr_debug.l
 constexpr char kMoonshineAsrInputWavPath[] = "/tmp/booster_moonshine_asr_input.wav";
 constexpr char kOpenAiAsrStatePath[] = "/tmp/booster_openai_asr_state.json";
 constexpr char kOpenAiAsrLogPath[] = "/tmp/booster_openai_asr.log";
+constexpr char kOpenAiRealtimeStatePath[] = "/tmp/booster_openai_realtime_state.json";
+constexpr char kOpenAiRealtimeLogPath[] = "/tmp/booster_openai_realtime.log";
 constexpr char kFakeBytedanceOpenAiLogPath[] = "/var/log/fake_bytedance_openai_asr.log";
 
 #if BOOSTER_DEV_MODE
@@ -142,6 +146,10 @@ bool EnvFlagEnabled(const char *name, bool default_value = false) {
 
 bool ExperimentalAsrEnabled() {
     return EnvFlagEnabled("BOOSTER_ENABLE_EXPERIMENTAL_ASR", false);
+}
+
+bool OpenAiRealtimeEnabled() {
+    return EnvFlagEnabled("BOOSTER_ENABLE_OPENAI_REALTIME", ExperimentalAsrEnabled());
 }
 
 std::string ResolveRtcVoiceType() {
@@ -453,6 +461,10 @@ std::string ResolveOpenAiAsrHelperPath() {
     return ResolveScriptPath("BOOSTER_OPENAI_ASR_HELPER", kOpenAiAsrHelper);
 }
 
+std::string ResolveOpenAiRealtimeHelperPath() {
+    return ResolveScriptPath("BOOSTER_OPENAI_REALTIME_HELPER", kOpenAiRealtimeHelper);
+}
+
 std::string BuildHelperLaunchTarget(const std::string &helper_path) {
     const std::filesystem::path helper(helper_path);
     if (helper.extension() == ".py") {
@@ -703,9 +715,11 @@ public:
 
     json StatusJson() const {
         const bool experimental_asr_enabled = ExperimentalAsrEnabled();
+        const bool openai_realtime_enabled = OpenAiRealtimeEnabled();
         const json whisperlive_asr = WhisperLiveAsrStatus();
         const json moonshine_asr = MoonshineAsrStatus();
         const json openai_asr = OpenAiAsrStatus();
+        const json openai_realtime = OpenAiRealtimeStatus();
         const json native_openai_bridge = NativeOpenAiBridgeStatus();
         std::scoped_lock lock(speech_mutex_);
         std::string last_heard = last_heard_text_;
@@ -735,6 +749,16 @@ public:
             }
             if (openai_asr.value("running", false)) {
                 last_spoken.clear();
+            }
+        }
+        if (openai_realtime_enabled && openai_realtime.is_object()) {
+            const auto helper_last_heard = Trim(openai_realtime.value("last_heard", std::string()));
+            const auto helper_last_spoken = Trim(openai_realtime.value("last_spoken", std::string()));
+            if (openai_realtime.value("running", false) && !helper_last_heard.empty()) {
+                last_heard = helper_last_heard;
+            }
+            if (openai_realtime.value("running", false) && !helper_last_spoken.empty()) {
+                last_spoken = helper_last_spoken;
             }
         }
         if (native_openai_bridge.is_object()) {
@@ -770,6 +794,11 @@ public:
                     {"label", "OpenAI ASR"},
                     {"available", experimental_asr_enabled && openai_asr.value("available", false)},
                 }},
+                {"openai_realtime", {
+                    {"id", kBackendOpenAiRealtime},
+                    {"label", "OpenAI Realtime"},
+                    {"available", openai_realtime_enabled && openai_realtime.value("available", false)},
+                }},
             }},
             {"tts_transport", BOOSTER_DEV_MODE ? "mock" : "lui_asr_only"},
             {"speech_debug", {
@@ -780,6 +809,7 @@ public:
             {"whisperlive_asr", whisperlive_asr},
             {"moonshine_asr", moonshine_asr},
             {"openai_asr", openai_asr},
+            {"openai_realtime", openai_realtime},
         };
     }
 
@@ -1163,6 +1193,97 @@ public:
 #endif
     }
 
+    json StartOpenAiRealtime(const json &config) const {
+#if BOOSTER_DEV_MODE
+        return {
+            {"ok", true},
+            {"action", "openai_realtime_start"},
+            {"backend", kBackendOpenAiRealtime},
+            {"dev_mode", true},
+            {"note", "OpenAI Realtime start is mocked in dev mode."},
+        };
+#else
+        const json stop_result = StopOpenAiRealtime();
+        const std::string requested_model = Trim(config.value("model", std::string("gpt-realtime")));
+        std::vector<std::pair<std::string, std::string>> envs = {
+            {"BOOSTER_OPENAI_REALTIME_LOG_PATH", kOpenAiRealtimeLogPath},
+            {"BOOSTER_OPENAI_REALTIME_STATE_PATH", kOpenAiRealtimeStatePath},
+            {"BOOSTER_OPENAI_REALTIME_MODEL", requested_model.empty() ? std::string("gpt-realtime") : requested_model},
+        };
+        const std::array<std::pair<const char *, const char *>, 8> mappings{{
+            {"transcription_model", "BOOSTER_OPENAI_REALTIME_TRANSCRIPTION_MODEL"},
+            {"language", "BOOSTER_OPENAI_REALTIME_LANGUAGE"},
+            {"instructions", "BOOSTER_OPENAI_REALTIME_INSTRUCTIONS"},
+            {"sample_rate", "BOOSTER_OPENAI_REALTIME_SAMPLE_RATE"},
+            {"vad_threshold", "BOOSTER_OPENAI_REALTIME_VAD_THRESHOLD"},
+            {"vad_prefix_ms", "BOOSTER_OPENAI_REALTIME_VAD_PREFIX_MS"},
+            {"vad_silence_ms", "BOOSTER_OPENAI_REALTIME_VAD_SILENCE_MS"},
+            {"max_output_tokens", "BOOSTER_OPENAI_REALTIME_MAX_OUTPUT_TOKENS"},
+        }};
+        for (const auto &[json_key, env_key] : mappings) {
+            if (!config.contains(json_key) || config.at(json_key).is_null()) {
+                continue;
+            }
+            std::string value;
+            if (config.at(json_key).is_string()) {
+                value = Trim(config.at(json_key).get<std::string>());
+            } else {
+                value = Trim(config.at(json_key).dump());
+            }
+            if (value.empty()) {
+                continue;
+            }
+            envs.push_back({env_key, value});
+        }
+        const std::vector<std::string> argv = {"python3", ResolveOpenAiRealtimeHelperPath()};
+        int status = 0;
+        const int spawned_pid = LaunchDetachedProcess(argv, kOpenAiRealtimeLogPath, envs, &status);
+        json result = {
+            {"ok", spawned_pid > 0 && status == 0},
+            {"action", "openai_realtime_start"},
+            {"backend", kBackendOpenAiRealtime},
+            {"requested_model", requested_model.empty() ? std::string("gpt-realtime") : requested_model},
+            {"requested_config", config},
+            {"helper_exit_status", status},
+            {"log_path", kOpenAiRealtimeLogPath},
+            {"state_path", kOpenAiRealtimeStatePath},
+            {"spawned_pid", spawned_pid},
+            {"auto_stop_result", stop_result},
+        };
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        json helper_status = OpenAiRealtimeStatus();
+        for (auto it = helper_status.begin(); it != helper_status.end(); ++it) {
+            result[it.key()] = it.value();
+        }
+        return result;
+#endif
+    }
+
+    json StopOpenAiRealtime() const {
+#if BOOSTER_DEV_MODE
+        return {
+            {"ok", true},
+            {"action", "openai_realtime_stop"},
+            {"backend", kBackendOpenAiRealtime},
+            {"dev_mode", true},
+            {"note", "OpenAI Realtime stop is mocked in dev mode."},
+        };
+#else
+        const json before = OpenAiRealtimeStatus();
+        const int pid = before.value("pid", 0);
+        if (pid > 0) {
+            RunCommand("kill -TERM " + std::to_string(pid));
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        json result = OpenAiRealtimeStatus();
+        result["ok"] = true;
+        result["action"] = "openai_realtime_stop";
+        result["backend"] = kBackendOpenAiRealtime;
+        result["stopped_pid"] = pid;
+        return result;
+#endif
+    }
+
     json GetVolume() const {
 #if BOOSTER_DEV_MODE
         return {
@@ -1361,6 +1482,49 @@ private:
                 status["state"] = "stopped";
             }
         }
+        return status;
+    }
+
+    json OpenAiRealtimeStatus() const {
+        if (!OpenAiRealtimeEnabled()) {
+            return {
+                {"available", false},
+                {"running", false},
+                {"state", "disabled"},
+                {"last_heard", ""},
+                {"last_spoken", ""},
+                {"last_error", ""},
+                {"log_path", kOpenAiRealtimeLogPath},
+                {"state_path", kOpenAiRealtimeStatePath},
+                {"log_tail", json::array()},
+            };
+        }
+        json status = ReadJsonFileIfPresent(kOpenAiRealtimeStatePath);
+        if (!status.is_object() || status.empty()) {
+            const bool has_api_key =
+                !Trim(std::getenv("OPENAI_API_KEY") ? std::getenv("OPENAI_API_KEY") : "").empty() ||
+                !Trim(std::getenv("CHATGPT_API_KEY") ? std::getenv("CHATGPT_API_KEY") : "").empty() ||
+                !Trim(std::getenv("CHAT_GPT_API") ? std::getenv("CHAT_GPT_API") : "").empty();
+            return {
+                {"available", std::filesystem::exists(ResolveOpenAiRealtimeHelperPath()) && has_api_key},
+                {"running", false},
+                {"state", "stopped"},
+                {"last_heard", ""},
+                {"last_spoken", ""},
+                {"last_error", ""},
+                {"log_path", kOpenAiRealtimeLogPath},
+                {"state_path", kOpenAiRealtimeStatePath},
+                {"log_tail", json::array()},
+            };
+        }
+        const int pid = status.value("pid", 0);
+        if (!IsProcessRunning(pid)) {
+            status["running"] = false;
+            if (status.value("state", std::string()) != "error") {
+                status["state"] = "stopped";
+            }
+        }
+        status["log_tail"] = ReadTailLinesIfPresent(kOpenAiRealtimeLogPath, 20);
         return status;
     }
 
@@ -1726,6 +1890,37 @@ http::response<http::string_body> HandleRequest(
             });
         }
         return JsonResponse(http::status::ok, wrapper.StopOpenAiAsr());
+    }
+
+    if (req.method() == http::verb::post && path == "/openai/realtime/start") {
+        if (!OpenAiRealtimeEnabled()) {
+            return JsonResponse(http::status::forbidden, {
+                {"ok", false},
+                {"backend", kBackendOpenAiRealtime},
+                {"error", "OpenAI Realtime is disabled"},
+            });
+        }
+        try {
+            const json body = ParseOptionalJsonBody(req.body());
+            return JsonResponse(http::status::ok, wrapper.StartOpenAiRealtime(body));
+        } catch (const std::exception &e) {
+            return JsonResponse(http::status::bad_request, {
+                {"ok", false},
+                {"error", e.what()},
+                {"path", path},
+            });
+        }
+    }
+
+    if (req.method() == http::verb::post && path == "/openai/realtime/stop") {
+        if (!OpenAiRealtimeEnabled()) {
+            return JsonResponse(http::status::forbidden, {
+                {"ok", false},
+                {"backend", kBackendOpenAiRealtime},
+                {"error", "OpenAI Realtime is disabled"},
+            });
+        }
+        return JsonResponse(http::status::ok, wrapper.StopOpenAiRealtime());
     }
 
     if (req.method() == http::verb::post && path == "/audio/volume") {

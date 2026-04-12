@@ -36,6 +36,10 @@
                   <input id="backend-openai" type="radio" name="speech-backend" value="openai_asr">
                   <span>OpenAI ASR</span>
                 </label>
+                <label id="backend-option-openai-realtime" class="backend-option">
+                  <input id="backend-openai-realtime" type="radio" name="speech-backend" value="openai_realtime">
+                  <span>OpenAI Realtime</span>
+                </label>
               </div>
             </div>
 
@@ -155,6 +159,29 @@
                 </div>
               </div>
               <p id="openai-note" class="backend-note">Select OpenAI ASR to enable transcription controls.</p>
+            </section>
+
+            <section id="backend-panel-openai-realtime" class="backend-panel" aria-labelledby="openai-realtime-controls-title">
+              <div class="backend-head">
+                <div>
+                  <h3 id="openai-realtime-controls-title" class="video-title">OpenAI Realtime</h3>
+                  <p class="video-copy">Experimental live mic streaming path with Realtime transcription and text response generation.</p>
+                </div>
+                <span id="openai-realtime-status" class="backend-status backend-status-idle">Inactive</span>
+              </div>
+              <div class="button-row">
+                <button id="openai-realtime-start" class="ghost">Start Listening</button>
+                <button id="openai-realtime-stop" class="ghost">Stop Listening</button>
+              </div>
+              <div class="volume-panel">
+                <div class="volume-head">
+                  <label class="tts-label" for="openai-realtime-model">Realtime Model</label>
+                </div>
+                <select id="openai-realtime-model" class="volume-slider">
+                  <option value="gpt-realtime" selected>gpt-realtime</option>
+                </select>
+              </div>
+              <p id="openai-realtime-note" class="backend-note">Select OpenAI Realtime to enable the experimental live voice path.</p>
             </section>
 
             <div class="battery-card">
