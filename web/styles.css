@@ -365,6 +365,26 @@ h1 {
   margin-bottom: 10px;
 }
 
+.debug-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+#openai-bridge-window {
+  min-height: 240px;
+  padding: 18px 20px;
+  border: 1px solid rgba(201, 92, 43, 0.18);
+  background:
+    linear-gradient(180deg, rgba(24, 29, 35, 0.96), rgba(17, 21, 26, 0.96));
+  color: #e9ded0;
+  font-family: "IBM Plex Mono", "SFMono-Regular", "Menlo", monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  tab-size: 2;
+}
+
 .openai-status {
   min-height: 48px;
   padding: 12px 14px;

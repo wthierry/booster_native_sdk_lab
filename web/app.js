@@ -6,6 +6,8 @@ const debugWindow = document.getElementById("debug-window");
 const heardWindow = document.getElementById("heard-window");
 const openAiBridgeWindow = document.getElementById("openai-bridge-window");
 const copyDebugButton = document.getElementById("copy-debug");
+const copyBridgeButton = document.getElementById("copy-bridge");
+const clearLogsButton = document.getElementById("clear-logs");
 const backendOptions = Array.from(document.querySelectorAll('input[name="speech-backend"]'));
 const backendOptionLabels = {
   rtc: document.getElementById("backend-option-rtc"),
@@ -55,6 +57,7 @@ const videoFrame = videoPreview.closest(".video-frame");
 
 let volumeUpdateTimer = null;
 let copyButtonTimer = null;
+let copyBridgeButtonTimer = null;
 let videoRefreshTimer = null;
 let lastHeardText = "";
 let lastMoonshineDebugText = "";
@@ -238,6 +241,59 @@ function filterMoonshineDebugLines(lines) {
   });
 }
 
+function filterNativeBridgeLines(lines) {
+  return lines.filter((line) => {
+    const text = String(line || "").trim();
+    if (!text) {
+      return false;
+    }
+    return (
+      text.includes("connection_open") ||
+      text.includes("connection_closed") ||
+      text.includes("recv_config_json=") ||
+      text.includes("openai_request_json=") ||
+      text.includes("openai_response_json=") ||
+      text.includes("sent_result_json=")
+    );
+  });
+}
+
+function formatBridgeJsonLine(text, prefix, label) {
+  if (!text.startsWith(prefix)) {
+    return null;
+  }
+  const raw = text.slice(prefix.length).trim();
+  try {
+    const parsed = JSON.parse(raw);
+    return `${label}\n${JSON.stringify(parsed, null, 2)}`;
+  } catch (_error) {
+    return `${label}\n${raw}`;
+  }
+}
+
+function formatNativeBridgeLine(line) {
+  const text = String(line || "").trim();
+  if (!text) {
+    return "";
+  }
+
+  const stamped = text.replace(/^\d{4}-\d{2}-\d{2}T[^\s]+\s+/, "");
+  if (stamped.includes("connection_open")) {
+    return "ASR Start\nconnection_open";
+  }
+  if (stamped.includes("connection_closed")) {
+    return "ASR Stop\nconnection_closed";
+  }
+
+  return (
+    formatBridgeJsonLine(stamped, "recv_config_json=", "Received Config JSON") ||
+    formatBridgeJsonLine(stamped, "openai_request_json=", "OpenAI Request JSON") ||
+    formatBridgeJsonLine(stamped, "openai_response_json=", "OpenAI Response JSON") ||
+    formatBridgeJsonLine(stamped, "sent_result_json=", "Sent Result JSON") ||
+    stamped
+  );
+}
+
 function setCopyButtonState(label, copied = false) {
   copyDebugButton.textContent = label;
   copyDebugButton.classList.toggle("is-copied", copied);
@@ -251,6 +307,29 @@ function setCopyButtonState(label, copied = false) {
       copyButtonTimer = null;
     }, 1600);
   }
+}
+
+function setCopyBridgeButtonState(label, copied = false) {
+  copyBridgeButton.textContent = label;
+  copyBridgeButton.classList.toggle("is-copied", copied);
+  if (copyBridgeButtonTimer) {
+    window.clearTimeout(copyBridgeButtonTimer);
+  }
+  if (label !== "Copy JSON") {
+    copyBridgeButtonTimer = window.setTimeout(() => {
+      copyBridgeButton.textContent = "Copy JSON";
+      copyBridgeButton.classList.remove("is-copied");
+      copyBridgeButtonTimer = null;
+    }, 1600);
+  }
+}
+
+function clearLogWindows() {
+  debugWindow.textContent = "";
+  openAiBridgeWindow.textContent = "Waiting for native OpenAI bridge output...";
+  lastOpenAiBridgeText = "";
+  setCopyButtonState("Copy Log");
+  setCopyBridgeButtonState("Copy JSON");
 }
 
 async function copyText(text) {
@@ -311,13 +390,12 @@ async function refreshSpeechDebug() {
   }
 
   const bridgeLines = Array.isArray(nativeOpenAiBridge.debug_tail) ? nativeOpenAiBridge.debug_tail : [];
-  const bridgeResult = typeof nativeOpenAiBridge.last_result === "string" ? nativeOpenAiBridge.last_result.trim() : "";
-  const bridgeSegment = typeof nativeOpenAiBridge.last_segment === "string" ? nativeOpenAiBridge.last_segment.trim() : "";
-  const bridgeText = [
-    bridgeResult ? `Last Result:\n${bridgeResult}` : "",
-    bridgeSegment && bridgeSegment !== bridgeResult ? `Last Segment:\n${bridgeSegment}` : "",
-    bridgeLines.length ? `Recent Log:\n${bridgeLines.join("\n")}` : "",
-  ].filter(Boolean).join("\n\n");
+  const filteredBridgeLines = filterNativeBridgeLines(bridgeLines);
+  const bridgeText = filteredBridgeLines
+    .map(formatNativeBridgeLine)
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
 
   if (!hasSpeechDebugBaseline) {
     hasSpeechDebugBaseline = true;
@@ -556,6 +634,26 @@ copyDebugButton.addEventListener("click", async () => {
     setCopyButtonState("Copy failed");
     appendDebug("Copy error", String(error));
   }
+});
+
+copyBridgeButton.addEventListener("click", async () => {
+  const text = openAiBridgeWindow.textContent.trim();
+  if (!text || text === "Waiting for native OpenAI bridge output...") {
+    setCopyBridgeButtonState("Nothing to copy");
+    return;
+  }
+
+  try {
+    await copyText(text);
+    setCopyBridgeButtonState("Copied", true);
+  } catch (error) {
+    setCopyBridgeButtonState("Copy failed");
+    appendDebug("Bridge copy error", String(error));
+  }
+});
+
+clearLogsButton.addEventListener("click", () => {
+  clearLogWindows();
 });
 
 volumeSlider.addEventListener("input", () => {

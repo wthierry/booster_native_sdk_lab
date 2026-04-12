@@ -23,14 +23,6 @@ MODEL = (os.getenv("BOOSTER_FAKE_ASR_MODEL", "gpt-4o-transcribe").strip()
          or "gpt-4o-transcribe")
 LANGUAGE = (os.getenv("BOOSTER_FAKE_ASR_LANGUAGE", "en").strip()
             or "en")
-PROMPT = (
-    os.getenv(
-        "BOOSTER_FAKE_ASR_PROMPT",
-        "Transcribe spoken English from a robot microphone. "
-        "Do not translate. If the audio is silence, noise, music, TV, or unclear speech, return an empty transcript.",
-    ).strip()
-    or "Transcribe spoken English from a robot microphone."
-)
 API_URL = (os.getenv("BOOSTER_FAKE_ASR_URL", "https://api.openai.com/v1/audio/transcriptions").strip()
            or "https://api.openai.com/v1/audio/transcriptions")
 
@@ -132,6 +124,7 @@ class Session:
         self.channels = int(audio.get("channel", self.channels))
         self.bits = int(audio.get("bits", self.bits))
         self.log(f"config rate={self.sample_rate} channel={self.channels} bits={self.bits}")
+        self.log(f"recv_config_json={json.dumps(body, ensure_ascii=False, separators=(',', ':'))}")
 
     def decode_audio_chunk(self, payload):
         if len(payload) < 15 or payload[:2] != b"\x11\x21":
@@ -191,7 +184,7 @@ class Session:
             + body
         )
         self.result_seq += 1
-        return frame
+        return frame, result
 
     def build_words(self, text, start_ms, end_ms):
         words = [word for word in text.strip().split() if word]
@@ -261,17 +254,32 @@ class Session:
             handle.setsampwidth(2)
             handle.setframerate(self.sample_rate)
             handle.writeframes(bytes(self.segment))
-        text = transcribe_wav(wav_path)
+        self.log(
+            "openai_request_json="
+            + json.dumps(
+                {
+                    "url": API_URL,
+                    "model": MODEL,
+                    "language": LANGUAGE,
+                    "file_path": str(wav_path),
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        )
+        text, openai_payload = transcribe_wav(wav_path)
         self.log(
             f"segment_done idx={self.segment_count} start_ms={int(start_sample * 1000 / self.sample_rate)} "
             f"end_ms={int(end_sample * 1000 / self.sample_rate)} text={json.dumps(text)}"
         )
+        self.log(f"openai_response_json={json.dumps(openai_payload, ensure_ascii=False, separators=(',', ':'))}")
         if not text:
             return
         self.last_text = text
-        frame = self.build_result_frame(text, start_sample, end_sample, definite=True)
+        frame, result_payload = self.build_result_frame(text, start_sample, end_sample, definite=True)
         await websocket.send(frame)
         self.log(f"sent_result seq={self.result_seq - 1} text={json.dumps(text)}")
+        self.log(f"sent_result_json={json.dumps(result_payload, ensure_ascii=False, separators=(',', ':'))}")
 
     async def flush_pending(self, websocket):
         if self.speaking and self.segment:
@@ -289,6 +297,12 @@ def transcribe_wav(path):
     )
     if not api_key:
         return ""
+    request_payload = {
+        "url": API_URL,
+        "model": MODEL,
+        "language": LANGUAGE,
+        "file_path": str(path),
+    }
     cmd = [
         "curl",
         "--silent",
@@ -303,17 +317,16 @@ def transcribe_wav(path):
         f"file=@{path};type=audio/wav",
         "-F",
         f"language={LANGUAGE}",
-        "-F",
-        f"prompt={PROMPT}",
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120, check=False)
     if proc.returncode != 0:
         raise RuntimeError(trim(proc.stderr) or trim(proc.stdout) or f"curl exited {proc.returncode}")
     payload = json.loads(proc.stdout)
+    payload.setdefault("_request", request_payload)
     text = trim(payload.get("text"))
     if should_drop_transcript(text):
-        return ""
-    return text
+        return "", payload
+    return text, payload
 
 
 async def handle_connection(websocket):

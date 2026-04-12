@@ -214,6 +214,7 @@
                   <h3 id="openai-bridge-title" class="video-title">OpenAI Bridge</h3>
                   <p class="video-copy">Latest transcript and bridge events returned by the native OpenAI redirect.</p>
                 </div>
+                <button id="copy-bridge" class="ghost" type="button">Copy JSON</button>
               </div>
               <pre id="openai-bridge-window" class="debug-window heard-window">Waiting for native OpenAI bridge output...</pre>
             </section>
@@ -224,7 +225,10 @@
                   <h3 id="debug-title" class="video-title">Debug Log</h3>
                   <p class="video-copy">Live requests and backend status events.</p>
                 </div>
-                <button id="copy-debug" class="ghost" type="button">Copy Log</button>
+                <div class="debug-actions">
+                  <button id="clear-logs" class="ghost" type="button">Clear Logs</button>
+                  <button id="copy-debug" class="ghost" type="button">Copy Log</button>
+                </div>
               </div>
               <pre id="debug-window" class="debug-window"></pre>
             </section>
