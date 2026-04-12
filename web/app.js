@@ -103,11 +103,11 @@ function updateBackendControls() {
   openAiStartButton.disabled = !openAiSelected;
   openAiStopButton.disabled = !openAiSelected;
   openAiModel.disabled = !openAiSelected;
-  openAiTuningControls.hidden = !openAiSelected;
-  openAiStartThreshold.disabled = !openAiSelected;
-  openAiContinueThreshold.disabled = !openAiSelected;
-  openAiSilenceFrames.disabled = !openAiSelected;
-  openAiMaxFrames.disabled = !openAiSelected;
+  openAiTuningControls.hidden = true;
+  openAiStartThreshold.disabled = true;
+  openAiContinueThreshold.disabled = true;
+  openAiSilenceFrames.disabled = true;
+  openAiMaxFrames.disabled = true;
 
   setBackendStatus(rtcStatus, rtcSelected ? "Active" : "Inactive", rtcSelected);
   setBackendStatus(whisperLiveStatus, whisperLiveSelected ? "Active" : "Inactive", whisperLiveSelected);
@@ -120,8 +120,8 @@ function updateBackendControls() {
     ? "Moonshine ASR listens on the robot mic and posts transcripts into the heard window."
     : "Select Moonshine ASR to enable robot-side transcription controls.";
   openAiNote.textContent = openAiSelected
-    ? "OpenAI ASR uploads detected speech segments for server-side transcription."
-    : "Select OpenAI ASR to enable cloud transcription using the server-side API key.";
+    ? "Current robot transcription path using the OpenAI ASR backend."
+    : "Select OpenAI ASR to enable transcription controls.";
 }
 
 function renderBattery(battery) {

@@ -55,13 +55,11 @@ constexpr char kRosTtsHelper[] = "scripts/ros_rtc_tts.py";
 constexpr char kWhisperLiveAsrHelper[] = "scripts/whisperlive_asr_daemon.py";
 constexpr char kMoonshineAsrHelper[] = "scripts/moonshine_asr_daemon.py";
 constexpr char kOpenAiAsrHelper[] = "scripts/openai_asr_daemon.py";
-constexpr char kLocalLlmTtsHelper[] = "scripts/local_llm_tts.py";
 constexpr int kDefaultInterruptSpeechDurationMs = 700;
 constexpr char kBackendRtc[] = "rtc";
 constexpr char kBackendWhisperLiveAsr[] = "whisperlive_asr";
 constexpr char kBackendMoonshineAsr[] = "moonshine_asr";
 constexpr char kBackendOpenAiAsr[] = "openai_asr";
-constexpr char kBackendLocalLlmTts[] = "local_llm_tts";
 constexpr char kWhisperLiveAsrStatePath[] = "/tmp/booster_whisperlive_asr_state.json";
 constexpr char kWhisperLiveAsrLogPath[] = "/tmp/booster_whisperlive_asr.log";
 constexpr char kMoonshineAsrStatePath[] = "/tmp/booster_moonshine_asr_state.json";
@@ -71,7 +69,6 @@ constexpr char kMoonshineAsrInputWavPath[] = "/tmp/booster_moonshine_asr_input.w
 constexpr char kOpenAiAsrStatePath[] = "/tmp/booster_openai_asr_state.json";
 constexpr char kOpenAiAsrLogPath[] = "/tmp/booster_openai_asr.log";
 constexpr char kFakeBytedanceOpenAiLogPath[] = "/var/log/fake_bytedance_openai_asr.log";
-constexpr char kLocalLlmTtsLogPath[] = "/tmp/booster_local_llm_tts.log";
 
 #if BOOSTER_DEV_MODE
 constexpr char kDefaultCameraPreviewPath[] = "tmp/booster_camera_preview.jpg";
@@ -438,10 +435,6 @@ std::string ResolveOpenAiAsrHelperPath() {
     return ResolveScriptPath("BOOSTER_OPENAI_ASR_HELPER", kOpenAiAsrHelper);
 }
 
-std::string ResolveLocalLlmTtsHelperPath() {
-    return ResolveScriptPath("BOOSTER_LOCAL_LLM_TTS_HELPER", kLocalLlmTtsHelper);
-}
-
 std::string BuildHelperLaunchTarget(const std::string &helper_path) {
     const std::filesystem::path helper(helper_path);
     if (helper.extension() == ".py") {
@@ -686,6 +679,7 @@ public:
                 }
             });
         asr_monitor_->InitChannel();
+        EnsureSpeechIdle();
 #endif
     }
 
@@ -694,8 +688,6 @@ public:
         const json moonshine_asr = MoonshineAsrStatus();
         const json openai_asr = OpenAiAsrStatus();
         const json native_openai_bridge = NativeOpenAiBridgeStatus();
-        MaybeLaunchNativeAutoReply(native_openai_bridge);
-        const json local_llm_tts = GetLocalLlmTtsStatus();
         std::scoped_lock lock(speech_mutex_);
         std::string last_heard = last_heard_text_;
         std::string last_spoken = last_spoken_text_;
@@ -759,11 +751,6 @@ public:
                     {"label", "OpenAI ASR"},
                     {"available", openai_asr.value("available", false)},
                 }},
-                {"local_llm_tts", {
-                    {"id", kBackendLocalLlmTts},
-                    {"label", "Local LLM + Piper"},
-                    {"available", local_llm_tts.value("available", false)},
-                }},
             }},
             {"tts_transport", BOOSTER_DEV_MODE ? "mock" : "lui_asr_only"},
             {"speech_debug", {
@@ -771,7 +758,6 @@ public:
                 {"last_spoken", last_spoken},
             }},
             {"native_openai_bridge", native_openai_bridge},
-            {"local_llm_tts", local_llm_tts},
             {"whisperlive_asr", whisperlive_asr},
             {"moonshine_asr", moonshine_asr},
             {"openai_asr", openai_asr},
@@ -816,10 +802,6 @@ public:
         json result = RunRosTtsHelper("lui_start_asr", json::object());
         const std::string response_body = Trim(result.value("response_body", std::string()));
         if (result.value("ok", false) || response_body != "Start ASR failed") {
-            if (result.value("ok", false)) {
-                std::scoped_lock lock(speech_mutex_);
-                native_auto_reply_enabled_ = true;
-            }
             return result;
         }
 
@@ -828,10 +810,6 @@ public:
         json retry_result = RunRosTtsHelper("lui_start_asr", json::object());
         retry_result["recovered_after_restart"] = retry_result.value("ok", false);
         retry_result["auto_stop_result"] = stop_result;
-        if (retry_result.value("ok", false)) {
-            std::scoped_lock lock(speech_mutex_);
-            native_auto_reply_enabled_ = true;
-        }
         return retry_result;
 #endif
     }
@@ -848,7 +826,7 @@ public:
 #else
         {
             std::scoped_lock lock(speech_mutex_);
-            native_auto_reply_enabled_ = false;
+            last_spoken_text_.clear();
         }
         return RunRosTtsHelper("lui_stop_asr", json::object());
 #endif
@@ -1231,14 +1209,6 @@ public:
 #endif
     }
 
-    json GetLocalLlmTtsStatus() const {
-        return LocalLlmTtsStatus();
-    }
-
-    json SpeakWithLocalLlmTts(const json &config) const {
-        return RunLocalLlmTts(config);
-    }
-
 private:
 #if !BOOSTER_DEV_MODE
     void HandleSubtitle(const booster_interface::msg::Subtitle &subtitle) {
@@ -1377,187 +1347,13 @@ private:
         return status;
     }
 
-    json LocalLlmTtsStatus() const {
-        const std::string helper_path = ResolveLocalLlmTtsHelperPath();
-        const std::vector<int> helper_pids = FindProcessesMatching(helper_path);
-        const std::string llama_server_bin = Trim(std::getenv("BOOSTER_LOCAL_LLM_SERVER_BIN")
-                                                      ? std::getenv("BOOSTER_LOCAL_LLM_SERVER_BIN")
-                                                      : "/home/booster/Workspace/llama.cpp-buildtest/build/bin/llama-server");
-        const std::string model = Trim(std::getenv("BOOSTER_LOCAL_LLM_MODEL")
-                                           ? std::getenv("BOOSTER_LOCAL_LLM_MODEL")
-                                           : "/home/booster/Workspace/models/qwen2.5-1.5b/qwen2.5-1.5b-instruct-q4_k_m.gguf");
-        const std::string piper_model = Trim(std::getenv("BOOSTER_LOCAL_TTS_PIPER_MODEL")
-                                                 ? std::getenv("BOOSTER_LOCAL_TTS_PIPER_MODEL")
-                                                 : "/home/booster/voices/piper/en_US-lessac-medium/en_US-lessac-medium.onnx");
-        const std::string piper_config = Trim(std::getenv("BOOSTER_LOCAL_TTS_PIPER_CONFIG")
-                                                  ? std::getenv("BOOSTER_LOCAL_TTS_PIPER_CONFIG")
-                                                  : "/home/booster/voices/piper/en_US-lessac-medium/en_US-lessac-medium.onnx.json");
-        json status = {
-            {"available",
-             std::filesystem::exists(helper_path) &&
-                 CommandPathExists(llama_server_bin) &&
-                 std::filesystem::exists(model) &&
-                 CommandPathExists("/usr/local/bin/piper") &&
-                 CommandPathExists("/usr/bin/aplay") &&
-                 std::filesystem::exists(piper_model) &&
-                 std::filesystem::exists(piper_config)},
-            {"helper_path", helper_path},
-            {"llama_server_bin", llama_server_bin},
-            {"model", model},
-            {"piper_model", piper_model},
-            {"piper_config", piper_config},
-            {"log_path", kLocalLlmTtsLogPath},
-            {"running", !helper_pids.empty()},
-            {"pids", helper_pids},
-            {"debug_tail", ReadTailLinesIfPresent(kLocalLlmTtsLogPath, 80)},
-            {"last_reply_text", ""},
-        };
-        if (status["debug_tail"].is_array()) {
-            for (auto it = status["debug_tail"].rbegin(); it != status["debug_tail"].rend(); ++it) {
-                if (!it->is_string()) {
-                    continue;
-                }
-                const json parsed = ParseJsonOrRawString(it->get<std::string>());
-                if (!parsed.is_object()) {
-                    continue;
-                }
-                const std::string reply_text = Trim(parsed.value("reply_text", std::string()));
-                if (!reply_text.empty()) {
-                    status["last_reply_text"] = reply_text;
-                    break;
-                }
-            }
-        }
-        return status;
-    }
-
-    void MaybeLaunchNativeAutoReply(const json &native_openai_bridge) const {
-#if BOOSTER_DEV_MODE
-        (void)native_openai_bridge;
-#else
-        const std::string last_result = Trim(native_openai_bridge.value("last_result", std::string()));
-        const std::string last_event = Trim(native_openai_bridge.value("last_result_event", std::string()));
-        if (last_result.empty() || last_event.empty()) {
-            return;
-        }
-
+    void EnsureSpeechIdle() {
+#if !BOOSTER_DEV_MODE
         {
             std::scoped_lock lock(speech_mutex_);
-            if (!native_auto_reply_enabled_ || last_auto_reply_event_ == last_event) {
-                return;
-            }
+            last_spoken_text_.clear();
         }
-
-        const json local_status = LocalLlmTtsStatus();
-        if (!local_status.value("available", false) || local_status.value("running", false)) {
-            return;
-        }
-
-        const std::vector<std::string> argv = {
-            "python3",
-            ResolveLocalLlmTtsHelperPath(),
-            "--text",
-            last_result,
-        };
-        int child_exit_status = 0;
-        const int spawned_pid = LaunchDetachedProcess(argv, kLocalLlmTtsLogPath, {}, &child_exit_status);
-        if (spawned_pid > 0 && child_exit_status == 0) {
-            std::scoped_lock lock(speech_mutex_);
-            last_auto_reply_event_ = last_event;
-            last_spoken_text_ = "Generating local reply...";
-        }
-#endif
-    }
-
-    json RunLocalLlmTts(const json &config) const {
-#if BOOSTER_DEV_MODE
-        return {
-            {"ok", true},
-            {"action", "local_llm_tts_speak"},
-            {"backend", kBackendLocalLlmTts},
-            {"dev_mode", true},
-            {"note", "Local LLM+TTS is mocked in dev mode."},
-        };
-#else
-        const std::string input_text = Trim(config.value("text", std::string()));
-        if (input_text.empty()) {
-            return {
-                {"ok", false},
-                {"action", "local_llm_tts_speak"},
-                {"backend", kBackendLocalLlmTts},
-                {"error", "text is required"},
-            };
-        }
-
-        const json status = LocalLlmTtsStatus();
-        if (!status.value("available", false)) {
-            return {
-                {"ok", false},
-                {"action", "local_llm_tts_speak"},
-                {"backend", kBackendLocalLlmTts},
-                {"error", "local llm/tts dependencies are not available"},
-                {"status", status},
-            };
-        }
-
-        std::vector<std::pair<std::string, std::string>> envs;
-        if (config.contains("system_prompt") && !config.at("system_prompt").is_null()) {
-            const std::string system_prompt = Trim(config.at("system_prompt").get<std::string>());
-            if (!system_prompt.empty()) {
-                envs.push_back({"BOOSTER_LOCAL_LLM_SYSTEM_PROMPT", system_prompt});
-            }
-        }
-        if (config.contains("max_tokens") && !config.at("max_tokens").is_null()) {
-            envs.push_back({"BOOSTER_LOCAL_LLM_MAX_TOKENS", Trim(config.at("max_tokens").dump())});
-        }
-        if (config.contains("model") && !config.at("model").is_null()) {
-            const std::string model = Trim(config.at("model").get<std::string>());
-            if (!model.empty()) {
-                envs.push_back({"BOOSTER_LOCAL_LLM_MODEL", model});
-            }
-        }
-        if (config.contains("piper_model") && !config.at("piper_model").is_null()) {
-            const std::string piper_model = Trim(config.at("piper_model").get<std::string>());
-            if (!piper_model.empty()) {
-                envs.push_back({"BOOSTER_LOCAL_TTS_PIPER_MODEL", piper_model});
-            }
-        }
-        if (config.contains("piper_config") && !config.at("piper_config").is_null()) {
-            const std::string piper_config = Trim(config.at("piper_config").get<std::string>());
-            if (!piper_config.empty()) {
-                envs.push_back({"BOOSTER_LOCAL_TTS_PIPER_CONFIG", piper_config});
-            }
-        }
-
-        std::string command;
-        for (const auto &[key, value] : envs) {
-            command += key + "=" + ShellEscape(value) + " ";
-        }
-        command +=
-            "python3 " + ShellEscape(ResolveLocalLlmTtsHelperPath()) + " --text " + ShellEscape(input_text) +
-            " 2>&1 | tee -a " + ShellEscape(kLocalLlmTtsLogPath);
-
-        int exit_status = 0;
-        const std::string output = RunCommand("bash -lc " + ShellEscape(command), &exit_status);
-        const std::string trimmed = Trim(output);
-        json result = {
-            {"ok", exit_status == 0},
-            {"action", "local_llm_tts_speak"},
-            {"backend", kBackendLocalLlmTts},
-            {"exit_status", exit_status},
-            {"log_path", kLocalLlmTtsLogPath},
-        };
-        if (!trimmed.empty()) {
-            const json parsed = ParseJsonOrRawString(trimmed);
-            if (parsed.is_object()) {
-                for (auto it = parsed.begin(); it != parsed.end(); ++it) {
-                    result[it.key()] = it.value();
-                }
-            } else {
-                result["output"] = trimmed;
-            }
-        }
-        return result;
+        (void)RunRosTtsHelper("lui_stop_asr", json::object());
 #endif
     }
 
@@ -1621,8 +1417,6 @@ private:
     mutable int volume_percent_ = 100;
     mutable std::string last_heard_text_;
     mutable std::string last_spoken_text_;
-    mutable bool native_auto_reply_enabled_ = false;
-    mutable std::string last_auto_reply_event_;
 };
 
 RuntimeOptions ParseArgs(int argc, char **argv) {
@@ -1835,19 +1629,6 @@ http::response<http::string_body> HandleRequest(
 
     if (req.method() == http::verb::post && path == "/openai/asr/stop") {
         return JsonResponse(http::status::ok, wrapper.StopOpenAiAsr());
-    }
-
-    if (req.method() == http::verb::post && path == "/local/llm_tts/speak") {
-        try {
-            const json body = ParseOptionalJsonBody(req.body());
-            return JsonResponse(http::status::ok, wrapper.SpeakWithLocalLlmTts(body));
-        } catch (const std::exception &e) {
-            return JsonResponse(http::status::bad_request, {
-                {"ok", false},
-                {"error", e.what()},
-                {"path", path},
-            });
-        }
     }
 
     if (req.method() == http::verb::post && path == "/audio/volume") {
