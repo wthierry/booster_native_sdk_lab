@@ -18,12 +18,9 @@ Observed directly over SSH on `2026-04-10` from `booster@192.168.5.149`.
 
 Minimal C++ HTTP wrapper over the native Booster SDK in [`../booster_robotics_sdk`](../booster_robotics_sdk).
 
-The lab currently supports four speech paths:
+The primary supported speech path is the native LUI/RTC route, redirected locally through the fake ByteDance bridge in [`scripts/fake_bytedance_openai_asr.py`](scripts/fake_bytedance_openai_asr.py).
 
-- Native RTC chat/TTS through the robot service
-- WhisperLive ASR
-- Moonshine ASR
-- OpenAI ASR via the `v1/audio/transcriptions` API using `CHATGPT_API_KEY` or `OPENAI_API_KEY`
+The repo still contains optional experimental ASR helpers for WhisperLive, Moonshine, and direct OpenAI transcription, but they are disabled by default and only exposed when `BOOSTER_ENABLE_EXPERIMENTAL_ASR=1` is set.
 
 ## What It Exposes
 
@@ -82,22 +79,12 @@ Or:
 BOOSTER_NETWORK_INTERFACE=lo BOOSTER_PORT=8080 ./build/booster_sdk_http_wrapper
 ```
 
-In macOS dev mode, robot-only features are mocked so the UI can run without the Booster SDK, ROS, DDS, or PulseAudio. Use `BOOSTER_CAMERA_PREVIEW_PATH` to point `/camera/preview.jpg` and OpenAI vision at a local image.
+In macOS dev mode, robot-only features are mocked so the UI can run without the Booster SDK, ROS, DDS, or PulseAudio. Use `BOOSTER_CAMERA_PREVIEW_PATH` to point `/camera/preview.jpg` at a local image.
 
-For the fastest local Mac voice path, the UI can open an OpenAI Realtime WebRTC session using your server-side API key. Supported env vars:
-
-```bash
-CHATGPT_API_KEY=...
-BOOSTER_OPENAI_REALTIME_MODEL=gpt-realtime
-BOOSTER_OPENAI_REALTIME_VOICE=verse
-BOOSTER_OPENAI_REALTIME_INSTRUCTIONS="You are Booster. Reply in one short sentence."
-```
-
-The Mac UI also exposes an OpenAI text mode. Optional text env vars:
+To expose the experimental non-native ASR controls in the UI and API, set:
 
 ```bash
-BOOSTER_OPENAI_TEXT_MODEL=gpt-4.1-mini
-BOOSTER_OPENAI_TEXT_SYSTEM_PROMPT="You are Booster. Reply clearly and briefly."
+BOOSTER_ENABLE_EXPERIMENTAL_ASR=1
 ```
 
 ## Example Calls

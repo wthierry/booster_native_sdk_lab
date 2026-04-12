@@ -20,19 +20,19 @@
             <div class="panel-head">
               <h2>Controls</h2>
               <div id="backend-selector" class="backend-selector" role="radiogroup" aria-label="Speech backend">
-                <label class="backend-option">
+                <label id="backend-option-rtc" class="backend-option">
                   <input id="backend-rtc" type="radio" name="speech-backend" value="rtc" checked>
                   <span>Native ASR</span>
                 </label>
-                <label class="backend-option">
+                <label id="backend-option-whisperlive" class="backend-option">
                   <input id="backend-whisperlive" type="radio" name="speech-backend" value="whisperlive_asr">
                   <span>WhisperLive ASR</span>
                 </label>
-                <label class="backend-option">
+                <label id="backend-option-moonshine" class="backend-option">
                   <input id="backend-moonshine" type="radio" name="speech-backend" value="moonshine_asr">
                   <span>Moonshine ASR</span>
                 </label>
-                <label class="backend-option">
+                <label id="backend-option-openai" class="backend-option">
                   <input id="backend-openai" type="radio" name="speech-backend" value="openai_asr">
                   <span>OpenAI ASR</span>
                 </label>
@@ -53,7 +53,7 @@
               </div>
             </section>
 
-            <section class="backend-panel" aria-labelledby="whisperlive-controls-title">
+            <section id="backend-panel-whisperlive" class="backend-panel" aria-labelledby="whisperlive-controls-title">
               <div class="backend-head">
                 <div>
                   <h3 id="whisperlive-controls-title" class="video-title">WhisperLive ASR</h3>
@@ -78,7 +78,7 @@
               <p id="whisperlive-note" class="backend-note">Select WhisperLive ASR to enable robot-side transcription.</p>
             </section>
 
-            <section class="backend-panel" aria-labelledby="moonshine-controls-title">
+            <section id="backend-panel-moonshine" class="backend-panel" aria-labelledby="moonshine-controls-title">
               <div class="backend-head">
                 <div>
                   <h3 id="moonshine-controls-title" class="video-title">Moonshine ASR</h3>
@@ -103,7 +103,7 @@
               <p id="moonshine-note" class="backend-note">Select Moonshine ASR to enable robot-side transcription controls.</p>
             </section>
 
-            <section class="backend-panel" aria-labelledby="openai-controls-title">
+            <section id="backend-panel-openai" class="backend-panel" aria-labelledby="openai-controls-title">
               <div class="backend-head">
                 <div>
                   <h3 id="openai-controls-title" class="video-title">OpenAI ASR</h3>

@@ -126,6 +126,24 @@ std::string Trim(std::string value) {
     return value.substr(start);
 }
 
+bool EnvFlagEnabled(const char *name, bool default_value = false) {
+    const char *raw = std::getenv(name);
+    if (raw == nullptr) {
+        return default_value;
+    }
+    std::string value = Trim(raw);
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    if (value.empty()) {
+        return default_value;
+    }
+    return value == "1" || value == "true" || value == "yes" || value == "on";
+}
+
+bool ExperimentalAsrEnabled() {
+    return EnvFlagEnabled("BOOSTER_ENABLE_EXPERIMENTAL_ASR", false);
+}
+
 std::string ResolveRtcVoiceType() {
     const char *configured = std::getenv("BOOSTER_RTC_VOICE_TYPE");
     if (configured != nullptr) {
@@ -684,6 +702,7 @@ public:
     }
 
     json StatusJson() const {
+        const bool experimental_asr_enabled = ExperimentalAsrEnabled();
         const json whisperlive_asr = WhisperLiveAsrStatus();
         const json moonshine_asr = MoonshineAsrStatus();
         const json openai_asr = OpenAiAsrStatus();
@@ -691,7 +710,7 @@ public:
         std::scoped_lock lock(speech_mutex_);
         std::string last_heard = last_heard_text_;
         std::string last_spoken = last_spoken_text_;
-        if (whisperlive_asr.is_object()) {
+        if (experimental_asr_enabled && whisperlive_asr.is_object()) {
             const auto helper_last_heard = Trim(whisperlive_asr.value("last_heard", std::string()));
             if (whisperlive_asr.value("running", false) && !helper_last_heard.empty()) {
                 last_heard = helper_last_heard;
@@ -700,7 +719,7 @@ public:
                 last_spoken.clear();
             }
         }
-        if (moonshine_asr.is_object()) {
+        if (experimental_asr_enabled && moonshine_asr.is_object()) {
             const auto helper_last_heard = Trim(moonshine_asr.value("last_heard", std::string()));
             if (moonshine_asr.value("running", false) && !helper_last_heard.empty()) {
                 last_heard = helper_last_heard;
@@ -709,7 +728,7 @@ public:
                 last_spoken.clear();
             }
         }
-        if (openai_asr.is_object()) {
+        if (experimental_asr_enabled && openai_asr.is_object()) {
             const auto helper_last_heard = Trim(openai_asr.value("last_heard", std::string()));
             if (openai_asr.value("running", false) && !helper_last_heard.empty()) {
                 last_heard = helper_last_heard;
@@ -739,17 +758,17 @@ public:
                 {"whisperlive_asr", {
                     {"id", kBackendWhisperLiveAsr},
                     {"label", "WhisperLive ASR"},
-                    {"available", whisperlive_asr.value("available", false)},
+                    {"available", experimental_asr_enabled && whisperlive_asr.value("available", false)},
                 }},
                 {"moonshine_asr", {
                     {"id", kBackendMoonshineAsr},
                     {"label", "Moonshine ASR"},
-                    {"available", moonshine_asr.value("available", false)},
+                    {"available", experimental_asr_enabled && moonshine_asr.value("available", false)},
                 }},
                 {"openai_asr", {
                     {"id", kBackendOpenAiAsr},
                     {"label", "OpenAI ASR"},
-                    {"available", openai_asr.value("available", false)},
+                    {"available", experimental_asr_enabled && openai_asr.value("available", false)},
                 }},
             }},
             {"tts_transport", BOOSTER_DEV_MODE ? "mock" : "lui_asr_only"},
@@ -1232,6 +1251,17 @@ private:
 #endif
 
     json WhisperLiveAsrStatus() const {
+        if (!ExperimentalAsrEnabled()) {
+            return {
+                {"available", false},
+                {"running", false},
+                {"state", "disabled"},
+                {"last_heard", ""},
+                {"last_error", ""},
+                {"log_path", kWhisperLiveAsrLogPath},
+                {"state_path", kWhisperLiveAsrStatePath},
+            };
+        }
         json status = ReadJsonFileIfPresent(kWhisperLiveAsrStatePath);
         if (!status.is_object() || status.empty()) {
             return {
@@ -1256,6 +1286,20 @@ private:
     }
 
     json MoonshineAsrStatus() const {
+        if (!ExperimentalAsrEnabled()) {
+            return {
+                {"available", false},
+                {"running", false},
+                {"state", "disabled"},
+                {"last_heard", ""},
+                {"last_error", ""},
+                {"log_path", kMoonshineAsrLogPath},
+                {"debug_log_path", kMoonshineAsrDebugLogPath},
+                {"state_path", kMoonshineAsrStatePath},
+                {"input_wav_path", kMoonshineAsrInputWavPath},
+                {"debug_tail", json::array()},
+            };
+        }
         json status = ReadJsonFileIfPresent(kMoonshineAsrStatePath);
         if (!status.is_object() || status.empty()) {
             return {
@@ -1283,6 +1327,17 @@ private:
     }
 
     json OpenAiAsrStatus() const {
+        if (!ExperimentalAsrEnabled()) {
+            return {
+                {"available", false},
+                {"running", false},
+                {"state", "disabled"},
+                {"last_heard", ""},
+                {"last_error", ""},
+                {"log_path", kOpenAiAsrLogPath},
+                {"state_path", kOpenAiAsrStatePath},
+            };
+        }
         json status = ReadJsonFileIfPresent(kOpenAiAsrStatePath);
         if (!status.is_object() || status.empty()) {
             const bool has_api_key =
@@ -1579,6 +1634,13 @@ http::response<http::string_body> HandleRequest(
     }
 
     if (req.method() == http::verb::post && path == "/whisperlive/asr/start") {
+        if (!ExperimentalAsrEnabled()) {
+            return JsonResponse(http::status::forbidden, {
+                {"ok", false},
+                {"backend", kBackendWhisperLiveAsr},
+                {"error", "Experimental ASR backends are disabled"},
+            });
+        }
         try {
             const json body = ParseOptionalJsonBody(req.body());
             const auto model = Trim(body.value("model", std::string("base.en")));
@@ -1593,10 +1655,24 @@ http::response<http::string_body> HandleRequest(
     }
 
     if (req.method() == http::verb::post && path == "/whisperlive/asr/stop") {
+        if (!ExperimentalAsrEnabled()) {
+            return JsonResponse(http::status::forbidden, {
+                {"ok", false},
+                {"backend", kBackendWhisperLiveAsr},
+                {"error", "Experimental ASR backends are disabled"},
+            });
+        }
         return JsonResponse(http::status::ok, wrapper.StopWhisperLiveAsr());
     }
 
     if (req.method() == http::verb::post && path == "/moonshine/asr/start") {
+        if (!ExperimentalAsrEnabled()) {
+            return JsonResponse(http::status::forbidden, {
+                {"ok", false},
+                {"backend", kBackendMoonshineAsr},
+                {"error", "Experimental ASR backends are disabled"},
+            });
+        }
         try {
             const json body = ParseOptionalJsonBody(req.body());
             const auto model = Trim(body.value("model", std::string("medium-streaming")));
@@ -1611,10 +1687,24 @@ http::response<http::string_body> HandleRequest(
     }
 
     if (req.method() == http::verb::post && path == "/moonshine/asr/stop") {
+        if (!ExperimentalAsrEnabled()) {
+            return JsonResponse(http::status::forbidden, {
+                {"ok", false},
+                {"backend", kBackendMoonshineAsr},
+                {"error", "Experimental ASR backends are disabled"},
+            });
+        }
         return JsonResponse(http::status::ok, wrapper.StopMoonshineAsr());
     }
 
     if (req.method() == http::verb::post && path == "/openai/asr/start") {
+        if (!ExperimentalAsrEnabled()) {
+            return JsonResponse(http::status::forbidden, {
+                {"ok", false},
+                {"backend", kBackendOpenAiAsr},
+                {"error", "Experimental ASR backends are disabled"},
+            });
+        }
         try {
             const json body = ParseOptionalJsonBody(req.body());
             return JsonResponse(http::status::ok, wrapper.StartOpenAiAsr(body));
@@ -1628,6 +1718,13 @@ http::response<http::string_body> HandleRequest(
     }
 
     if (req.method() == http::verb::post && path == "/openai/asr/stop") {
+        if (!ExperimentalAsrEnabled()) {
+            return JsonResponse(http::status::forbidden, {
+                {"ok", false},
+                {"backend", kBackendOpenAiAsr},
+                {"error", "Experimental ASR backends are disabled"},
+            });
+        }
         return JsonResponse(http::status::ok, wrapper.StopOpenAiAsr());
     }
 

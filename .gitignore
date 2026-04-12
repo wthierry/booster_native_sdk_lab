@@ -1,6 +1,8 @@
 # Build output
 /build/
+/build-dev/
 /cmake-build-*/
+/CMakeFiles/
 
 # CMake and compilation byproducts
 *.o
@@ -27,6 +29,8 @@ logs/
 log/
 tmp/
 temp/
+.env
+.env.*
 
 # Editor and OS files
 .DS_Store
@@ -36,3 +40,4 @@ Thumbs.db
 
 # Local reference docs
 K1 Instruction Manual - V1.5 - Feishu Docs.pdf
+Modelfile.argumentative

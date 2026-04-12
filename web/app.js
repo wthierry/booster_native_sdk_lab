@@ -7,6 +7,17 @@ const heardWindow = document.getElementById("heard-window");
 const openAiBridgeWindow = document.getElementById("openai-bridge-window");
 const copyDebugButton = document.getElementById("copy-debug");
 const backendOptions = Array.from(document.querySelectorAll('input[name="speech-backend"]'));
+const backendOptionLabels = {
+  rtc: document.getElementById("backend-option-rtc"),
+  whisperlive_asr: document.getElementById("backend-option-whisperlive"),
+  moonshine_asr: document.getElementById("backend-option-moonshine"),
+  openai_asr: document.getElementById("backend-option-openai"),
+};
+const backendPanels = {
+  whisperlive_asr: document.getElementById("backend-panel-whisperlive"),
+  moonshine_asr: document.getElementById("backend-panel-moonshine"),
+  openai_asr: document.getElementById("backend-panel-openai"),
+};
 const rtcStartButton = document.getElementById("rtc-start");
 const rtcStopButton = document.getElementById("rtc-stop");
 const whisperLiveStartButton = document.getElementById("whisperlive-start");
@@ -50,6 +61,12 @@ let lastMoonshineDebugText = "";
 let lastOpenAiBridgeText = "";
 let hasSpeechDebugBaseline = false;
 let selectedBackend = "rtc";
+let backendAvailability = {
+  rtc: true,
+  whisperlive_asr: false,
+  moonshine_asr: false,
+  openai_asr: false,
+};
 const whisperLiveModelStorageKey = "booster.whisperlive.model";
 const moonshineModelStorageKey = "booster.moonshine.model";
 const openAiModelStorageKey = "booster.openai.model";
@@ -88,9 +105,12 @@ function setBackendStatus(element, label, active) {
 
 function updateBackendControls() {
   const rtcSelected = selectedBackend === "rtc";
-  const whisperLiveSelected = selectedBackend === "whisperlive_asr";
-  const moonshineSelected = selectedBackend === "moonshine_asr";
-  const openAiSelected = selectedBackend === "openai_asr";
+  const whisperLiveEnabled = Boolean(backendAvailability.whisperlive_asr);
+  const moonshineEnabled = Boolean(backendAvailability.moonshine_asr);
+  const openAiEnabled = Boolean(backendAvailability.openai_asr);
+  const whisperLiveSelected = whisperLiveEnabled && selectedBackend === "whisperlive_asr";
+  const moonshineSelected = moonshineEnabled && selectedBackend === "moonshine_asr";
+  const openAiSelected = openAiEnabled && selectedBackend === "openai_asr";
 
   rtcStartButton.disabled = !rtcSelected;
   rtcStopButton.disabled = !rtcSelected;
@@ -122,6 +142,37 @@ function updateBackendControls() {
   openAiNote.textContent = openAiSelected
     ? "Current robot transcription path using the OpenAI ASR backend."
     : "Select OpenAI ASR to enable transcription controls.";
+}
+
+function applyBackendAvailability(speechBackends) {
+  const nextAvailability = {
+    rtc: true,
+    whisperlive_asr: Boolean(speechBackends?.whisperlive_asr?.available),
+    moonshine_asr: Boolean(speechBackends?.moonshine_asr?.available),
+    openai_asr: Boolean(speechBackends?.openai_asr?.available),
+  };
+  backendAvailability = nextAvailability;
+
+  for (const [backend, label] of Object.entries(backendOptionLabels)) {
+    if (label) {
+      label.hidden = !nextAvailability[backend];
+    }
+  }
+  for (const [backend, panel] of Object.entries(backendPanels)) {
+    if (panel) {
+      panel.hidden = !nextAvailability[backend];
+    }
+  }
+
+  if (!nextAvailability[selectedBackend]) {
+    selectedBackend = "rtc";
+    const rtcOption = document.getElementById("backend-rtc");
+    if (rtcOption) {
+      rtcOption.checked = true;
+    }
+  }
+
+  updateBackendControls();
 }
 
 function renderBattery(battery) {
@@ -244,6 +295,7 @@ async function postJson(path, payload) {
 async function refreshSpeechDebug() {
   const response = await fetch("/health");
   const data = await response.json();
+  applyBackendAvailability(data?.wrapper?.speech_backends || {});
   const speech = data?.wrapper?.speech_debug || {};
   const moonshine = data?.wrapper?.moonshine_asr || {};
   const nativeOpenAiBridge = data?.wrapper?.native_openai_bridge || {};
@@ -455,6 +507,16 @@ for (const [slider, render] of [
 for (const option of backendOptions) {
   option.addEventListener("change", () => {
     if (!option.checked) {
+      return;
+    }
+    if (!backendAvailability[option.value]) {
+      option.checked = false;
+      const rtcOption = document.getElementById("backend-rtc");
+      if (rtcOption) {
+        rtcOption.checked = true;
+      }
+      selectedBackend = "rtc";
+      updateBackendControls();
       return;
     }
     selectedBackend = option.value;

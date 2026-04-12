@@ -53,8 +53,6 @@ stop_server() {
   systemctl stop "$FAKE_SERVICE_NAME" >/dev/null 2>&1 || true
   systemctl disable "$FAKE_SERVICE_NAME" >/dev/null 2>&1 || true
   pkill -f "$SERVER_SCRIPT" || true
-  pkill -f "/home/booster/Workspace/booster_native_sdk_lab/scripts/openspeech_tcp_relay.py" || true
-  rm -f /run/openspeech_tcp_relay.pid || true
   rm -f "$PID_PATH" || true
 }
 

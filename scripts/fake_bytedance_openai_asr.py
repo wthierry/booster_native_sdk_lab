@@ -19,10 +19,20 @@ from pathlib import Path
 import websockets
 
 
-MODEL = "gpt-4o-mini-transcribe"
-LANGUAGE = "en"
-PROMPT = "Transcribe spoken English from a robot microphone."
-API_URL = "https://api.openai.com/v1/audio/transcriptions"
+MODEL = (os.getenv("BOOSTER_FAKE_ASR_MODEL", "gpt-4o-transcribe").strip()
+         or "gpt-4o-transcribe")
+LANGUAGE = (os.getenv("BOOSTER_FAKE_ASR_LANGUAGE", "en").strip()
+            or "en")
+PROMPT = (
+    os.getenv(
+        "BOOSTER_FAKE_ASR_PROMPT",
+        "Transcribe spoken English from a robot microphone. "
+        "Do not translate. If the audio is silence, noise, music, TV, or unclear speech, return an empty transcript.",
+    ).strip()
+    or "Transcribe spoken English from a robot microphone."
+)
+API_URL = (os.getenv("BOOSTER_FAKE_ASR_URL", "https://api.openai.com/v1/audio/transcriptions").strip()
+           or "https://api.openai.com/v1/audio/transcriptions")
 
 
 def iso_now():
@@ -31,6 +41,15 @@ def iso_now():
 
 def trim(value):
     return str(value or "").strip()
+
+
+def should_drop_transcript(text):
+    lowered_language = LANGUAGE.lower()
+    if not lowered_language.startswith("en"):
+        return False
+    has_ascii_alnum = any(ch.isascii() and ch.isalnum() for ch in text)
+    has_non_ascii = any(not ch.isascii() for ch in text)
+    return has_non_ascii and not has_ascii_alnum
 
 
 def parse_env_file(path):
@@ -291,7 +310,10 @@ def transcribe_wav(path):
     if proc.returncode != 0:
         raise RuntimeError(trim(proc.stderr) or trim(proc.stdout) or f"curl exited {proc.returncode}")
     payload = json.loads(proc.stdout)
-    return trim(payload.get("text"))
+    text = trim(payload.get("text"))
+    if should_drop_transcript(text):
+        return ""
+    return text
 
 
 async def handle_connection(websocket):
