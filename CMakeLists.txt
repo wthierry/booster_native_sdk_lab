@@ -14,7 +14,9 @@ option(BOOSTER_DEV_MODE "Build without robot SDK and Linux runtime dependencies"
 
 set(BOOSTER_SDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../booster_robotics_sdk" CACHE PATH "Path to the Booster native SDK repo")
 set(BOOSTER_MOONSHINE_SOURCE_ROOT "" CACHE PATH "Path to the Moonshine source checkout")
+set(BOOSTER_LLAMA_CPP_ROOT "" CACHE PATH "Path to the llama.cpp checkout")
 option(BOOSTER_ENABLE_MOONSHINE_NATIVE "Build the native Moonshine ASR helper when Moonshine source is available" ON)
+option(BOOSTER_ENABLE_SIMPLECHAT_SERVICE "Build the simplechat-service binary when llama.cpp is available" ON)
 
 if(NOT BOOSTER_MOONSHINE_SOURCE_ROOT)
   foreach(_moonshine_candidate
@@ -23,6 +25,17 @@ if(NOT BOOSTER_MOONSHINE_SOURCE_ROOT)
       "/home/booster/Workspace/moonshine_check")
     if(EXISTS "${_moonshine_candidate}")
       set(BOOSTER_MOONSHINE_SOURCE_ROOT "${_moonshine_candidate}" CACHE PATH "Path to the Moonshine source checkout" FORCE)
+      break()
+    endif()
+  endforeach()
+endif()
+
+if(NOT BOOSTER_LLAMA_CPP_ROOT)
+  foreach(_llama_candidate
+      "${CMAKE_CURRENT_SOURCE_DIR}/../llama.cpp"
+      "/home/booster/Workspace/llama.cpp-buildtest")
+    if(EXISTS "${_llama_candidate}")
+      set(BOOSTER_LLAMA_CPP_ROOT "${_llama_candidate}" CACHE PATH "Path to the llama.cpp checkout" FORCE)
       break()
     endif()
   endforeach()
@@ -178,4 +191,52 @@ endif()
 
 if(NOT APPLE)
   target_link_libraries(booster_sdk_http_wrapper PRIVATE pthread)
+endif()
+
+if(BOOSTER_ENABLE_SIMPLECHAT_SERVICE AND BOOSTER_LLAMA_CPP_ROOT)
+  set(BOOSTER_LLAMA_INCLUDE_DIR "${BOOSTER_LLAMA_CPP_ROOT}/include")
+  set(BOOSTER_GGML_INCLUDE_DIR "${BOOSTER_LLAMA_CPP_ROOT}/ggml/include")
+  set(BOOSTER_LLAMA_LIBRARY "${BOOSTER_LLAMA_CPP_ROOT}/build/bin/libllama.so")
+  set(BOOSTER_GGML_LIBRARY "${BOOSTER_LLAMA_CPP_ROOT}/build/bin/libggml.so")
+  if(EXISTS "${BOOSTER_LLAMA_INCLUDE_DIR}/llama.h" AND EXISTS "${BOOSTER_GGML_INCLUDE_DIR}/ggml.h" AND EXISTS "${BOOSTER_LLAMA_LIBRARY}" AND EXISTS "${BOOSTER_GGML_LIBRARY}")
+    add_executable(booster_simplechat_service
+      src/simplechat_service.cpp
+    )
+    target_include_directories(booster_simplechat_service PRIVATE
+      "${BOOSTER_LLAMA_INCLUDE_DIR}"
+      "${BOOSTER_GGML_INCLUDE_DIR}"
+    )
+    if(NOT BOOSTER_DEV_MODE)
+      target_include_directories(booster_simplechat_service PRIVATE
+        "${BOOSTER_SDK_INCLUDE_DIR}"
+      )
+    endif()
+    if(Boost_INCLUDE_DIRS)
+      target_include_directories(booster_simplechat_service PRIVATE ${Boost_INCLUDE_DIRS})
+    endif()
+    if(TARGET nlohmann_json::nlohmann_json)
+      target_link_libraries(booster_simplechat_service PRIVATE nlohmann_json::nlohmann_json)
+    elseif(EXISTS "/opt/homebrew/include/nlohmann/json.hpp")
+      target_include_directories(booster_simplechat_service PRIVATE /opt/homebrew/include)
+    endif()
+    target_compile_definitions(booster_simplechat_service PRIVATE
+      BOOSTER_NATIVE_SDK_LAB_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+    if(TARGET Boost::system)
+      target_link_libraries(booster_simplechat_service PRIVATE Boost::system)
+    elseif(Boost_LIBRARIES)
+      target_link_libraries(booster_simplechat_service PRIVATE ${Boost_LIBRARIES})
+    endif()
+    target_link_libraries(booster_simplechat_service PRIVATE
+      "${BOOSTER_LLAMA_LIBRARY}"
+      "${BOOSTER_GGML_LIBRARY}"
+    )
+    set_target_properties(booster_simplechat_service PROPERTIES
+      BUILD_RPATH "${BOOSTER_LLAMA_CPP_ROOT}/build/bin"
+      INSTALL_RPATH "${BOOSTER_LLAMA_CPP_ROOT}/build/bin"
+    )
+    if(NOT APPLE)
+      target_link_libraries(booster_simplechat_service PRIVATE pthread)
+    endif()
+  endif()
 endif()
