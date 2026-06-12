@@ -32,12 +32,8 @@
                   <input id="backend-moonshine" type="radio" name="speech-backend" value="moonshine_asr">
                   <span>Moonshine ASR</span>
                 </label>
-                <label id="backend-option-openai" class="backend-option">
-                  <input id="backend-openai" type="radio" name="speech-backend" value="openai_asr">
-                  <span>OpenAI ASR</span>
-                </label>
                 <label id="backend-option-openai-realtime" class="backend-option">
-                  <input id="backend-openai-realtime" type="radio" name="speech-backend" value="openai_realtime">
+                  <input id="backend-openai-realtime" type="radio" name="speech-backend" value="openai_realtime" checked>
                   <span>OpenAI Realtime</span>
                 </label>
               </div>
@@ -104,61 +100,21 @@
                   <option value="medium-streaming" selected>medium-streaming</option>
                 </select>
               </div>
-              <p id="moonshine-note" class="backend-note">Select Moonshine ASR to enable robot-side transcription controls.</p>
-            </section>
-
-            <section id="backend-panel-openai" class="backend-panel" aria-labelledby="openai-controls-title">
-              <div class="backend-head">
-                <div>
-                  <h3 id="openai-controls-title" class="video-title">OpenAI ASR</h3>
-                  <p class="video-copy">Current robot transcription path using the OpenAI ASR backend.</p>
+              <div class="volume-panel">
+                <div class="volume-head">
+                  <label class="tts-label" for="moonshine-update-interval">Update Interval</label>
+                  <span id="moonshine-update-interval-value" class="volume-value">0.2s</span>
                 </div>
-                <span id="openai-status" class="backend-status backend-status-idle">Inactive</span>
-              </div>
-              <div class="button-row">
-                <button id="openai-start" class="ghost">Start Listening</button>
-                <button id="openai-stop" class="ghost">Stop Listening</button>
+                <input id="moonshine-update-interval" class="volume-slider" type="range" min="0.1" max="1.0" step="0.1" value="0.2" />
               </div>
               <div class="volume-panel">
                 <div class="volume-head">
-                  <label class="tts-label" for="openai-model">ASR Model</label>
+                  <label class="tts-label" for="moonshine-vad-threshold">VAD Threshold</label>
+                  <span id="moonshine-vad-threshold-value" class="volume-value">0.5</span>
                 </div>
-                <select id="openai-model" class="volume-slider">
-                  <option value="gpt-4o-mini-transcribe" selected>gpt-4o-mini-transcribe</option>
-                  <option value="gpt-4o-transcribe">gpt-4o-transcribe</option>
-                </select>
+                <input id="moonshine-vad-threshold" class="volume-slider" type="range" min="0.1" max="1.0" step="0.1" value="0.5" />
               </div>
-              <div id="openai-tuning-controls" hidden>
-                <div class="volume-panel">
-                  <div class="volume-head">
-                    <label class="tts-label" for="openai-start-threshold">Start Threshold</label>
-                    <span id="openai-start-threshold-value" class="volume-value">1800</span>
-                  </div>
-                  <input id="openai-start-threshold" class="volume-slider" type="range" min="200" max="4000" step="50" value="1800">
-                </div>
-                <div class="volume-panel">
-                  <div class="volume-head">
-                    <label class="tts-label" for="openai-continue-threshold">Continue Threshold</label>
-                    <span id="openai-continue-threshold-value" class="volume-value">700</span>
-                  </div>
-                  <input id="openai-continue-threshold" class="volume-slider" type="range" min="100" max="3000" step="25" value="700">
-                </div>
-                <div class="volume-panel">
-                  <div class="volume-head">
-                    <label class="tts-label" for="openai-silence-frames">Silence Frames</label>
-                    <span id="openai-silence-frames-value" class="volume-value">8</span>
-                  </div>
-                  <input id="openai-silence-frames" class="volume-slider" type="range" min="2" max="40" step="1" value="8">
-                </div>
-                <div class="volume-panel">
-                  <div class="volume-head">
-                    <label class="tts-label" for="openai-max-frames">Max Frames</label>
-                    <span id="openai-max-frames-value" class="volume-value">90</span>
-                  </div>
-                  <input id="openai-max-frames" class="volume-slider" type="range" min="20" max="200" step="1" value="90">
-                </div>
-              </div>
-              <p id="openai-note" class="backend-note">Select OpenAI ASR to enable transcription controls.</p>
+              <p id="moonshine-note" class="backend-note">Select Moonshine ASR to enable robot-side transcription controls.</p>
             </section>
 
             <section id="backend-panel-openai-realtime" class="backend-panel" aria-labelledby="openai-realtime-controls-title">
@@ -179,6 +135,7 @@
                 </div>
                 <select id="openai-realtime-model" class="volume-slider">
                   <option value="gpt-realtime" selected>gpt-realtime</option>
+                  <option value="gpt-realtime-mini">gpt-realtime-mini</option>
                 </select>
               </div>
               <p id="openai-realtime-note" class="backend-note">Select OpenAI Realtime to enable the experimental live voice path.</p>
@@ -205,6 +162,26 @@
           </div>
 
           <div class="panel-column">
+            <section class="pose-panel" aria-labelledby="robot-pose-title">
+              <div class="pose-head">
+                <div>
+                  <h3 id="robot-pose-title" class="video-title">3D Robot Pose</h3>
+                  <p class="video-copy">K1 articulated pose from live joint states, using the in-repo asset bundle for the URDF and STL meshes.</p>
+                </div>
+                <div class="pose-controls">
+                  <label class="video-toggle pose-toggle">
+                    <input id="robot-pose-use-meshes" type="checkbox">
+                    <span>Load STL meshes</span>
+                  </label>
+                  <span id="robot-pose-status" class="backend-status backend-status-idle">Waiting</span>
+                </div>
+              </div>
+              <div class="pose-frame">
+                <canvas id="robot-pose-canvas" class="pose-canvas" width="640" height="420"></canvas>
+              </div>
+              <div id="robot-pose-meta" class="pose-meta">Waiting for robot joint state...</div>
+            </section>
+
             <section class="video-panel" aria-labelledby="video-preview-title">
               <div class="video-head">
                 <div>
@@ -224,7 +201,9 @@
                 <div id="video-placeholder" class="video-placeholder">Video preview is off.</div>
               </div>
             </section>
+          </div>
 
+          <div class="panel-column">
             <section class="debug-panel" aria-labelledby="heard-title">
               <div class="debug-head">
                 <div>
@@ -233,6 +212,21 @@
                 </div>
               </div>
               <pre id="heard-window" class="debug-window heard-window">Waiting for speech...</pre>
+            </section>
+
+            <section class="debug-panel" aria-labelledby="simplechat-title">
+              <div class="debug-head">
+                <div>
+                  <h3 id="simplechat-title" class="video-title">Local Chat</h3>
+                  <p class="video-copy">Type directly to the robot's local llama.cpp service.</p>
+                </div>
+                <span id="simplechat-status" class="backend-status backend-status-idle">Checking</span>
+              </div>
+              <textarea id="simplechat-input" class="tts-input" placeholder="Type a message for the local chat service..."></textarea>
+              <div class="button-row">
+                <button id="simplechat-reset" class="ghost" type="button">Reset Chat</button>
+              </div>
+              <pre id="simplechat-output" class="debug-window heard-window">Waiting for local chat...</pre>
             </section>
 
             <section class="debug-panel" aria-labelledby="openai-bridge-title">
@@ -264,6 +258,7 @@
       </section>
     </main>
 
+    <script src="/robot-pose.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>

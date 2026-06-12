@@ -81,6 +81,8 @@ BOOSTER_NETWORK_INTERFACE=lo BOOSTER_PORT=8080 ./build/booster_sdk_http_wrapper
 
 In macOS dev mode, robot-only features are mocked so the UI can run without the Booster SDK, ROS, DDS, or PulseAudio. Use `BOOSTER_CAMERA_PREVIEW_PATH` to point `/camera/preview.jpg` at a local image.
 
+The K1 viewer assets now live in-repo under [`assets/robots/K1`](assets/robots/K1). By default the wrapper serves STL files and the URDF from that checkout-local path. Override with `BOOSTER_ASSET_ROOT=/some/other/assets/root` if you need to point at a different asset bundle.
+
 To expose the experimental non-native ASR controls in the UI and API, set:
 
 ```bash

@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BUILD_DIR="${ROOT_DIR}/build"
+WRAPPER_BIN="${BUILD_DIR}/booster_sdk_http_wrapper"
+OLLAMA_LOG="${TMPDIR:-/tmp}/booster_ollama.log"
+
+cd "${ROOT_DIR}"
+
+if ! command -v ollama >/dev/null 2>&1; then
+  echo "ollama is not installed or not in PATH" >&2
+  exit 1
+fi
+
+if ! pgrep -x ollama >/dev/null 2>&1; then
+  echo "Starting ollama serve..."
+  nohup ollama serve >"${OLLAMA_LOG}" 2>&1 &
+  sleep 2
+fi
+
+echo "Configuring mac build..."
+cmake -S . -B "${BUILD_DIR}" -DBOOSTER_DEV_MODE=ON
+
+echo "Building wrapper..."
+cmake --build "${BUILD_DIR}" -j
+
+if [[ ! -x "${WRAPPER_BIN}" ]]; then
+  echo "wrapper binary not found: ${WRAPPER_BIN}" >&2
+  exit 1
+fi
+
+echo "Starting web interface at http://127.0.0.1:8080/"
+exec "${WRAPPER_BIN}"

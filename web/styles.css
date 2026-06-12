@@ -25,7 +25,7 @@ body {
 }
 
 .page {
-  max-width: 900px;
+  max-width: 1560px;
   margin: 0 auto;
   padding: 32px 20px 48px;
 }
@@ -70,14 +70,15 @@ h1 {
 
 .panel-grid {
   display: grid;
-  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
-  gap: 20px;
+  grid-template-columns: minmax(300px, 0.9fr) minmax(360px, 1.05fr) minmax(320px, 0.95fr);
+  gap: 18px;
   align-items: start;
 }
 
 .panel-column {
   display: flex;
   flex-direction: column;
+  min-width: 0;
 }
 
 .panel-head {
@@ -211,6 +212,73 @@ h1 {
   border: 1px solid var(--line);
   border-radius: 18px;
   background: rgba(17, 21, 26, 0.92);
+}
+
+.pose-panel {
+  margin-bottom: 18px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at top, rgba(201, 92, 43, 0.16), transparent 38%),
+    linear-gradient(180deg, rgba(20, 25, 31, 0.97), rgba(15, 19, 24, 0.95));
+}
+
+.pose-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.pose-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.pose-toggle {
+  padding: 8px 12px;
+  border: 1px solid rgba(226, 214, 198, 0.12);
+  border-radius: 999px;
+  background: rgba(26, 31, 37, 0.72);
+}
+
+.pose-frame {
+  position: relative;
+  min-height: 280px;
+  overflow: hidden;
+  border-radius: 16px;
+  border: 1px solid rgba(226, 214, 198, 0.08);
+  background:
+    radial-gradient(circle at 50% 18%, rgba(88, 124, 151, 0.18), transparent 28%),
+    linear-gradient(180deg, rgba(13, 19, 24, 0.98), rgba(29, 20, 16, 0.98));
+}
+
+.pose-canvas {
+  display: block;
+  width: 100%;
+  height: 320px;
+  cursor: grab;
+}
+
+.pose-canvas:active {
+  cursor: grabbing;
+}
+
+.pose-meta {
+  margin-top: 12px;
+  min-height: 46px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(226, 214, 198, 0.08);
+  background: rgba(26, 31, 37, 0.82);
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .video-head {
@@ -601,6 +669,16 @@ button:disabled {
   border: 2px solid #181512;
 }
 
+@media (max-width: 1180px) {
+  .page {
+    max-width: 1120px;
+  }
+
+  .panel-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+
 @media (max-width: 700px) {
   .panel-grid {
     grid-template-columns: 1fr;
@@ -628,5 +706,14 @@ button:disabled {
 
   .battery-card {
     grid-template-columns: 1fr;
+  }
+
+  .pose-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .pose-canvas {
+    height: 280px;
   }
 }

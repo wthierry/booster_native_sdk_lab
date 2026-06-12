@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <mutex>
 #include <stdexcept>
@@ -31,6 +32,7 @@ namespace {
 
 struct Options {
     std::string model_path;
+    std::string system_file;
     std::string bind_address = "127.0.0.1";
     unsigned short port = 8092;
     int ngl = 99;
@@ -40,7 +42,7 @@ struct Options {
 void print_usage(int, char ** argv) {
     std::printf("\nexample usage:\n");
     std::printf(
-        "\n    %s -m model.gguf [--bind 127.0.0.1] [--port 8092] [-c 2048] [-ngl 99]\n",
+        "\n    %s -m model.gguf [--system-file Modelfile.argumentative] [--bind 127.0.0.1] [--port 8092] [-c 2048] [-ngl 99]\n",
         argv[0]);
     std::printf("\n");
 }
@@ -56,8 +58,43 @@ std::string trim(std::string value) {
     return value.substr(start);
 }
 
+std::string read_file(const std::string &path) {
+    std::ifstream input(path);
+    if (!input) {
+        throw std::runtime_error("failed to open system file");
+    }
+    return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+}
+
+std::string default_system_file_path() {
+#ifdef BOOSTER_NATIVE_SDK_LAB_SOURCE_DIR
+    return std::string(BOOSTER_NATIVE_SDK_LAB_SOURCE_DIR) + "/Modelfile.default";
+#else
+    return "Modelfile.default";
+#endif
+}
+
+std::string parse_system_prompt(const std::string &modelfile) {
+    const std::string marker = "SYSTEM";
+    const std::size_t marker_pos = modelfile.find(marker);
+    if (marker_pos == std::string::npos) {
+        return "";
+    }
+    const std::size_t opening = modelfile.find("\"\"\"", marker_pos);
+    if (opening == std::string::npos) {
+        return "";
+    }
+    const std::size_t start = opening + 3;
+    const std::size_t closing = modelfile.find("\"\"\"", start);
+    if (closing == std::string::npos) {
+        return "";
+    }
+    return trim(modelfile.substr(start, closing - start));
+}
+
 Options parse_args(int argc, char ** argv) {
     Options options;
+    options.system_file = default_system_file_path();
     for (int i = 1; i < argc; ++i) {
         try {
             if (std::strcmp(argv[i], "-m") == 0) {
@@ -66,6 +103,12 @@ Options parse_args(int argc, char ** argv) {
                     std::exit(1);
                 }
                 options.model_path = argv[++i];
+            } else if (std::strcmp(argv[i], "--system-file") == 0) {
+                if (i + 1 >= argc) {
+                    print_usage(argc, argv);
+                    std::exit(1);
+                }
+                options.system_file = argv[++i];
             } else if (std::strcmp(argv[i], "-c") == 0) {
                 if (i + 1 >= argc) {
                     print_usage(argc, argv);
@@ -166,6 +209,16 @@ public:
         llama_sampler_chain_add(sampler_, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
 
         formatted_.resize(llama_n_ctx(ctx_));
+
+        if (!options.system_file.empty()) {
+            const std::string modelfile = read_file(options.system_file);
+            system_prompt_ = parse_system_prompt(modelfile);
+            if (system_prompt_.empty()) {
+                throw std::runtime_error("failed to parse SYSTEM block from system file");
+            }
+            system_file_ = options.system_file;
+        }
+        seed_system_prompt();
     }
 
     ~SimpleChatEngine() {
@@ -242,6 +295,7 @@ public:
         std::scoped_lock lock(mutex_);
         clear_messages();
         prev_len_ = 0;
+        seed_system_prompt();
         return {
             {"ok", true},
             {"reset", true},
@@ -254,10 +308,19 @@ public:
             {"ok", true},
             {"status", "ok"},
             {"turns", static_cast<int>(messages_.size() / 2)},
+            {"system_prompt_loaded", !system_prompt_.empty()},
+            {"system_file", system_file_},
         };
     }
 
 private:
+    void seed_system_prompt() {
+        if (system_prompt_.empty()) {
+            return;
+        }
+        messages_.push_back(llama_chat_message{"system", ::strdup(system_prompt_.c_str())});
+    }
+
     std::string generate_locked(const std::string &prompt) {
         std::string response;
 
@@ -333,6 +396,8 @@ private:
     std::vector<llama_chat_message> messages_;
     std::vector<char> formatted_;
     int prev_len_ = 0;
+    std::string system_prompt_;
+    std::string system_file_;
     mutable std::mutex mutex_;
 };
 

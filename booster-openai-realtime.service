@@ -1,0 +1,18 @@
+[Unit]
+Description=Booster OpenAI Realtime Audio Service
+After=network.target sound.target
+
+[Service]
+Type=simple
+User=booster
+Environment=XDG_RUNTIME_DIR=/run/user/1007
+Environment=PULSE_SERVER=unix:/run/user/1007/pulse/native
+EnvironmentFile=/home/booster/Workspace/booster_native_sdk_lab/.env
+EnvironmentFile=-/tmp/booster_openai_realtime.env
+WorkingDirectory=/home/booster/Workspace/booster_native_sdk_lab
+ExecStart=/usr/bin/python3 /home/booster/Workspace/booster_native_sdk_lab/scripts/openai_realtime_daemon.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -28,7 +28,7 @@ MODEL = os.getenv("BOOSTER_WHISPERLIVE_MODEL", "base.en").strip() or "base.en"
 LANGUAGE = os.getenv("BOOSTER_WHISPERLIVE_LANGUAGE", "en").strip() or "en"
 SERVER_HOST = os.getenv("BOOSTER_WHISPERLIVE_HOST", "127.0.0.1").strip() or "127.0.0.1"
 SERVER_PORT = int(os.getenv("BOOSTER_WHISPERLIVE_PORT", "0"))
-USE_VAD = os.getenv("BOOSTER_WHISPERLIVE_USE_VAD", "1").strip() not in {"0", "false", "False"}
+USE_VAD = os.getenv("BOOSTER_WHISPERLIVE_USE_VAD", "0").strip() not in {"0", "false", "False"}
 SOURCE = os.getenv("BOOSTER_WHISPERLIVE_SOURCE", "").strip()
 COMMIT_SETTLE_SEC = float(os.getenv("BOOSTER_WHISPERLIVE_COMMIT_SETTLE_SEC", "1.2"))
 
@@ -116,6 +116,7 @@ class WhisperLiveClient:
         self.pending_final = ""
         self.pending_final_at = 0.0
         self.last_committed = ""
+        self.hearing_started_at = 0.0
 
     def on_open(self, ws):
         ws.send(json.dumps({
@@ -175,6 +176,12 @@ class WhisperLiveClient:
             "last_error": "",
         }
 
+        if not is_final and not self.hearing_started_at:
+            self.hearing_started_at = time.time()
+
+        if is_final:
+            self.hearing_started_at = 0.0
+
         if is_final and segment_key != self.last_segment_key:
             self.last_segment_key = segment_key
             self.pending_final = transcript
@@ -194,10 +201,25 @@ class WhisperLiveClient:
         set_state_field(
             self.state,
             last_heard=self.pending_final,
+            last_partial="",
             state="listening",
             last_error="",
         )
         self.pending_final = ""
+
+    def expire_partial(self):
+        if not self.hearing_started_at:
+            return
+        if time.time() - self.hearing_started_at < COMMIT_SETTLE_SEC:
+            return
+        self.hearing_started_at = 0.0
+        if trim(self.state.get("last_partial")):
+            set_state_field(
+                self.state,
+                last_partial="",
+                state="listening",
+                last_error="",
+            )
 
     def on_error(self, _ws, error):
         self.error_message = trim(error)
@@ -332,6 +354,7 @@ def main():
             if client.failed.is_set():
                 break
             client.flush_pending_final()
+            client.expire_partial()
     finally:
         try:
             recorder.terminate()

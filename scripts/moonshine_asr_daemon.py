@@ -3,10 +3,10 @@
 import datetime as dt
 import json
 import os
+import platform
 import subprocess
 import signal
 import time
-from typing import Optional
 
 from moonshine_voice.download import get_model_for_language
 from moonshine_voice.moonshine_api import ModelArch
@@ -30,6 +30,10 @@ PULSE_SOURCE = os.getenv(
 ).strip()
 
 RUNNING = True
+IS_MAC = platform.system() == "Darwin"
+
+if IS_MAC:
+    import sounddevice as sd
 
 MODEL_ARCH_MAP = {
     "tiny": ModelArch.TINY,
@@ -82,9 +86,8 @@ def resolve_model_arch(name: str) -> ModelArch:
 
 
 class StateListener(TranscriptEventListener):
-    def __init__(self, state, control):
+    def __init__(self, state):
         self.state = state
-        self.control = control
         self.last_partial = ""
         self.last_heard = ""
 
@@ -117,10 +120,9 @@ class StateListener(TranscriptEventListener):
             self.state,
             state="listening",
             last_heard=text,
-            last_partial=text,
+            last_partial="",
             last_error="",
         )
-        self.control["reset_requested"] = True
 
     def on_error(self, event):
         log_line(f"error: {trim(event.error)}")
@@ -154,6 +156,76 @@ def create_transcriber_stream(model_path, resolved_arch, listener):
     stream.add_listener(listener)
     stream.start()
     return transcriber, stream
+
+
+def resolve_sounddevice_input_device():
+    configured = trim(DEVICE_NAME)
+    if not configured or configured.lower() == "default":
+        return None
+    if configured.isdigit():
+        return int(configured)
+    devices = sd.query_devices()
+    lowered = configured.lower()
+    for index, device in enumerate(devices):
+        if device.get("max_input_channels", 0) <= 0:
+            continue
+        if lowered in str(device.get("name", "")).lower():
+            return index
+    return configured
+
+
+def describe_sounddevice_input_device(device):
+    if device is None:
+        default_input = sd.default.device[0]
+        if default_input is None or default_input < 0:
+            return "default"
+        try:
+            return f"{default_input}:{sd.query_devices(default_input)['name']}"
+        except Exception:
+            return "default"
+    try:
+        details = sd.query_devices(device)
+        return f"{device}:{details['name']}"
+    except Exception:
+        return str(device)
+
+
+class SoundDeviceCapture:
+    def __init__(self, stream, state):
+        self.stream = stream
+        self.state = state
+        self.device = resolve_sounddevice_input_device()
+        self.selected_device = describe_sounddevice_input_device(self.device)
+        self.input_stream = None
+
+    def start(self):
+        def audio_callback(indata, frames, callback_time, status):
+            del frames, callback_time
+            if not RUNNING:
+                return
+            if status:
+                log_line(f"capture status: {trim(status)}")
+            audio = np.asarray(indata, dtype=np.float32).reshape(-1)
+            self.stream.add_audio(audio, SAMPLE_RATE)
+
+        self.input_stream = sd.InputStream(
+            samplerate=SAMPLE_RATE,
+            blocksize=BLOCKSIZE,
+            device=self.device,
+            channels=CHANNELS,
+            dtype="float32",
+            callback=audio_callback,
+        )
+        self.input_stream.start()
+        set_state_field(self.state, source=self.selected_device)
+        log_line(f"capture backend: sounddevice device={self.selected_device}")
+
+    def stop(self):
+        if self.input_stream is None:
+            return
+        self.input_stream.stop()
+        self.input_stream.close()
+        self.input_stream = None
 
 
 def close_transcriber_stream(transcriber, stream):
@@ -205,22 +277,30 @@ def main():
             f"samplerate={SAMPLE_RATE} blocksize={BLOCKSIZE} channels={CHANNELS}"
         )
 
-        control = {"reset_requested": False}
-        listener = StateListener(state, control)
+        listener = StateListener(state)
         transcriber, stream = create_transcriber_stream(model_path, resolved_arch, listener)
-        parec_cmd = build_parec_command()
-        log_line(f"capture command: {' '.join(parec_cmd)}")
-        parec = subprocess.Popen(
-            parec_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            bufsize=0,
-        )
+        capture = None
+        parec = None
         chunk_bytes = BLOCKSIZE * CHANNELS * 2
+        if IS_MAC:
+            capture = SoundDeviceCapture(stream, state)
+            capture.start()
+        else:
+            parec_cmd = build_parec_command()
+            log_line(f"capture command: {' '.join(parec_cmd)}")
+            parec = subprocess.Popen(
+                parec_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                bufsize=0,
+            )
         log_line("listening")
         set_state_field(state, state="listening", last_error="")
 
         while RUNNING:
+            if IS_MAC:
+                time.sleep(0.1)
+                continue
             if parec.poll() is not None:
                 stderr_output = trim((parec.stderr.read() or b"").decode("utf-8", errors="replace"))
                 raise RuntimeError(stderr_output or f"parec exited with code {parec.returncode}")
@@ -230,18 +310,15 @@ def main():
                 continue
             audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
             stream.add_audio(audio, SAMPLE_RATE)
-            if control["reset_requested"] and RUNNING:
-                control["reset_requested"] = False
-                log_line("resetting stream after heard")
-                close_transcriber_stream(transcriber, stream)
-                transcriber, stream = create_transcriber_stream(model_path, resolved_arch, listener)
-                set_state_field(state, state="listening", last_error="")
 
-        parec.terminate()
-        try:
-            parec.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            parec.kill()
+        if capture is not None:
+            capture.stop()
+        if parec is not None:
+            parec.terminate()
+            try:
+                parec.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                parec.kill()
         close_transcriber_stream(transcriber, stream)
         log_line("stopped")
         set_state_field(state, running=False, state="stopped", last_error="")

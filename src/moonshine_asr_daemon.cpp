@@ -95,13 +95,12 @@ const std::string kLanguage = GetEnvOrDefault("BOOSTER_MOONSHINE_ASR_LANGUAGE", 
 const std::string kModelName = GetEnvOrDefault("BOOSTER_MOONSHINE_ASR_MODEL", "medium-streaming");
 const std::string kDeviceName = GetEnvOrDefault("BOOSTER_MOONSHINE_ASR_DEVICE", "default");
 const double kUpdateIntervalSec = GetEnvDouble("BOOSTER_MOONSHINE_ASR_UPDATE_INTERVAL_SEC", 0.2);
-const double kPrerollSec = GetEnvDouble("BOOSTER_MOONSHINE_ASR_PREROLL_SEC", 0.5);
+const double kVadThreshold = GetEnvDouble("BOOSTER_MOONSHINE_ASR_VAD_THRESHOLD", 0.5);
 const int kSampleRate = GetEnvInt("BOOSTER_MOONSHINE_ASR_SAMPLE_RATE", 16000);
 const int kBlockSize = GetEnvInt("BOOSTER_MOONSHINE_ASR_BLOCKSIZE", 1024);
 const int kChannels = GetEnvInt("BOOSTER_MOONSHINE_ASR_CHANNELS", 1);
 
 std::atomic<bool> gRunning{true};
-std::atomic<bool> gResetRequested{false};
 std::mutex gStateMutex;
 json gState = json::object();
 
@@ -410,13 +409,6 @@ void FinalizeStream(MoonshineContext &context) {
   ProcessTranscript(transcript);
 }
 
-void RestartMoonshine(
-    MoonshineContext &context, const std::string &model_path, uint32_t model_arch) {
-  FinalizeStream(context);
-  FreeMoonshine(context);
-  context = StartMoonshine(model_path, model_arch);
-}
-
 void AddAudioToMoonshine(MoonshineContext &context, const std::vector<float> &audio) {
   if (audio.empty()) {
     return;
@@ -460,10 +452,9 @@ void ProcessTranscript(const transcript_t *transcript) {
       UpdateState([&](json &state) {
         state["state"] = "listening";
         state["last_heard"] = text;
-        state["last_partial"] = text;
+        state["last_partial"] = "";
         state["last_error"] = "";
       });
-      gResetRequested = true;
     }
   }
 }
@@ -508,6 +499,8 @@ int main() {
         {"label", "Moonshine ASR"},
         {"language", kLanguage},
         {"model", kModelName},
+        {"update_interval", kUpdateIntervalSec},
+        {"vad_threshold", kVadThreshold},
         {"model_path", model_path},
         {"device", kDeviceName},
         {"source", pulse_source},
@@ -555,12 +548,6 @@ int main() {
     capture = StartCapture(pulse_source);
     WavWriter wav_writer(kInputWavPath);
     std::vector<char> raw_buffer(static_cast<std::size_t>(kBlockSize * kChannels * 2));
-    const std::size_t preroll_max_samples =
-        static_cast<std::size_t>(std::max(0.0, kPrerollSec) * static_cast<double>(kSampleRate));
-    std::vector<float> preroll_buffer;
-    if (preroll_max_samples > 0) {
-      preroll_buffer.reserve(preroll_max_samples);
-    }
     double audio_seconds_since_update = 0.0;
 
     LogLine("capture command: " + CaptureCommandForLog(pulse_source));
@@ -616,21 +603,6 @@ int main() {
       for (std::size_t i = 0; i < sample_count; ++i) {
         audio[i] = static_cast<float>(samples[i]) / 32768.0f;
       }
-      if (preroll_max_samples > 0) {
-        if (audio.size() >= preroll_max_samples) {
-          preroll_buffer.assign(audio.end() - static_cast<std::ptrdiff_t>(preroll_max_samples), audio.end());
-        } else {
-          const std::size_t overflow =
-              preroll_buffer.size() + audio.size() > preroll_max_samples
-                  ? preroll_buffer.size() + audio.size() - preroll_max_samples
-                  : 0;
-          if (overflow > 0) {
-            preroll_buffer.erase(preroll_buffer.begin(),
-                                 preroll_buffer.begin() + static_cast<std::ptrdiff_t>(overflow));
-          }
-          preroll_buffer.insert(preroll_buffer.end(), audio.begin(), audio.end());
-        }
-      }
       AddAudioToMoonshine(moonshine, audio);
       audio_seconds_since_update += static_cast<double>(audio.size()) / static_cast<double>(kSampleRate);
 
@@ -644,21 +616,6 @@ int main() {
         audio_seconds_since_update = 0.0;
       }
 
-      if (gResetRequested && gRunning) {
-        gResetRequested = false;
-        LogLine("restarting transcriber after heard");
-        RestartMoonshine(moonshine, model_path, *model_arch);
-        if (!preroll_buffer.empty()) {
-          LogLine("replaying preroll after restart samples=" + std::to_string(preroll_buffer.size()));
-          AddAudioToMoonshine(moonshine, preroll_buffer);
-        }
-        LogLine("transcriber restart complete");
-        audio_seconds_since_update = 0.0;
-        UpdateState([](json &state) {
-          state["state"] = "listening";
-          state["last_error"] = "";
-        });
-      }
     }
 
     FinalizeStream(moonshine);
